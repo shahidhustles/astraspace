@@ -160,21 +160,21 @@ function contentWindow(): Window {
 }
 
 describe("enrichPageContentWithAccessibility", () => {
-  test("applies Chromium role and name when the DOM fallback omits them", () => {
+  test("applies Chromium role and name to the exact resolved control", async () => {
     const content = extractPageContent(contentWindow());
     const widget = content.controls.find((c) => c.bounds?.y === LAYOUT.widget.y);
     expect(widget?.role).toBeNull();
     expect(widget?.name).toBe("Volume");
 
-    const axRoot: SerializableAXNode = {
-      role: "RootWebArea",
-      children: [
-        { role: "textbox", name: "Full name" },
-        { role: "slider", name: "Volume" },
-        { role: "textbox" },
-      ],
-    };
-    enrichPageContentWithAccessibility(content, axRoot);
+    await enrichPageContentWithAccessibility(content, async (control) => {
+      if (control.name === "Volume") {
+        return { role: "slider", name: "Volume" };
+      }
+      if (control.name === "Full name") {
+        return { role: "textbox", name: "Full name" };
+      }
+      return { role: "textbox" };
+    });
 
     expect(widget?.role).toBe("slider");
     expect(widget?.name).toBe("Volume");
@@ -184,27 +184,28 @@ describe("enrichPageContentWithAccessibility", () => {
     expect(unlabeled?.name).toBeNull();
   });
 
-  test("keeps DOM-derived values when Chromium omits a node", () => {
+  test("keeps one control unchanged when Chromium omits only that node", async () => {
     const content = extractPageContent(contentWindow());
-    const axRoot: SerializableAXNode = {
-      role: "RootWebArea",
-      children: [{ role: "textbox", name: "Full name" }],
-    };
-    enrichPageContentWithAccessibility(content, axRoot);
+    await enrichPageContentWithAccessibility(content, async (control) => {
+      if (control.name === "Volume") {
+        return null;
+      }
+      return { role: "textbox", name: control.name ?? undefined };
+    });
 
     const widget = content.controls.find((c) => c.bounds?.y === LAYOUT.widget.y);
     expect(widget?.role).toBeNull();
     expect(widget?.name).toBe("Volume");
   });
 
-  test("ignores an empty snapshot and returns the content untouched", () => {
+  test("ignores missing snapshots and returns the content untouched", async () => {
     const content = extractPageContent(contentWindow());
     const before = JSON.stringify(content);
-    const result = enrichPageContentWithAccessibility(content, null);
+    const result = await enrichPageContentWithAccessibility(content, async () => null);
     expect(JSON.stringify(result)).toBe(before);
   });
 
-  test("survives a JSON round trip of serialized AX input", () => {
+  test("survives a JSON round trip of serialized AX input", async () => {
     const axRoot: SerializableAXNode = {
       role: "RootWebArea",
       children: [
@@ -213,12 +214,34 @@ describe("enrichPageContentWithAccessibility", () => {
         { role: "textbox", backendNodeId: 44 },
       ],
     };
-    const roundTripped = JSON.parse(JSON.stringify(axRoot)) as SerializableAXNode;
+    const roundTripped = JSON.parse(JSON.stringify(axRoot.children?.[1])) as SerializableAXNode;
     const content = extractPageContent(contentWindow());
-    enrichPageContentWithAccessibility(content, roundTripped);
+    await enrichPageContentWithAccessibility(content, async (control) =>
+      control.name === "Volume" ? roundTripped : null,
+    );
 
     const widget = content.controls.find((c) => c.bounds?.y === LAYOUT.widget.y);
     expect(widget?.role).toBe("slider");
     expect(widget?.name).toBe("Volume");
+  });
+
+  test("does not shift later controls when one accessibility node is absent", async () => {
+    const content = extractPageContent(contentWindow());
+    await enrichPageContentWithAccessibility(content, async (control) => {
+      if (control.name === "Volume") {
+        return null;
+      }
+      if (control.name === null) {
+        return { role: "searchbox", name: "Search" };
+      }
+      return { role: "textbox", name: control.name };
+    });
+
+    const widget = content.controls.find((control) => control.bounds?.y === LAYOUT.widget.y);
+    const unlabeled = content.controls.find((control) => control.bounds?.y === LAYOUT.unlabeled.y);
+    expect(widget?.role).toBeNull();
+    expect(widget?.name).toBe("Volume");
+    expect(unlabeled?.role).toBe("searchbox");
+    expect(unlabeled?.name).toBe("Search");
   });
 });

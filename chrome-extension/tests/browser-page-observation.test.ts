@@ -63,7 +63,7 @@ interface FakePage extends Page {
   screenshotCalls: number;
   screenshotError: Error | null;
   lastScreenshotArgs: unknown;
-  axSnapshot: SerializableAXNode | null;
+  axSnapshots: Array<SerializableAXNode | null>;
 }
 
 interface FakeBrowser extends Browser {
@@ -79,7 +79,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
     screenshotCalls: 0,
     screenshotError: null,
     lastScreenshotArgs: null,
-    axSnapshot: null,
+    axSnapshots: [],
     url: () => page.currentUrl,
     evaluate: async (expression: string): Promise<unknown> => {
       page.evaluateCalls.push(expression);
@@ -89,12 +89,28 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
       const runner = new Function("window", "document", `return (${expression});`);
       return runner(win, win.document);
     },
+    evaluateHandle: async (_fn: unknown, domPath: number[]) => {
+      let node: Node | null = win.document.body;
+      for (const index of domPath) {
+        node = node?.childNodes.item(index) ?? null;
+      }
+      const resolved = node instanceof win.Element ? node : null;
+      return {
+        asElement: () =>
+          resolved
+            ? {
+                evaluate: async () => resolved.tagName.toLowerCase(),
+              }
+            : null,
+        dispose: async () => {},
+      };
+    },
     title: async () => {
       page.titleCalls += 1;
       return "Capture fixture";
     },
     accessibility: {
-      snapshot: async () => page.axSnapshot,
+      snapshot: async () => page.axSnapshots.shift() ?? null,
     },
     screenshot: async (options?: unknown) => {
       page.screenshotCalls += 1;
@@ -205,15 +221,12 @@ describe("BrowserPage.observe", () => {
   test("applies Chromium accessibility roles and names to the ref records", async () => {
     const win = fixtureWindow();
     const { deps, page } = fakeDeps(win);
-    page.axSnapshot = {
-      role: "RootWebArea",
-      children: [
-        { role: "textbox", name: "Full name" },
-        { role: "button", name: "Save" },
-        { role: "link", name: "Read more" },
-        { role: "slider", name: "Volume" },
-      ],
-    };
+    page.axSnapshots = [
+      { role: "textbox", name: "Full name" },
+      { role: "button", name: "Save" },
+      { role: "link", name: "Read more" },
+      { role: "slider", name: "Volume" },
+    ];
     const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
     await wrapper.attach();
 

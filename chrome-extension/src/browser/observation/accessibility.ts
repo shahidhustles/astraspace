@@ -216,17 +216,15 @@ export function flattenAXTree(nodes: SerializableAXNode[]): FlatAXNode[] {
   return out;
 }
 
-export function enrichPageContentWithAccessibility(
+export async function enrichPageContentWithAccessibility(
   content: ExtractedPageContent,
-  axRoot: SerializableAXNode | null,
-): ExtractedPageContent {
-  const axControls = axRoot ? flattenAXTree([axRoot]) : [];
-  if (axControls.length === 0) {
-    return content;
-  }
-  const count = Math.min(content.controls.length, axControls.length);
-  for (let i = 0; i < count; i++) {
-    applyAXNode(content.controls[i], axControls[i]);
+  resolveControl: (control: ExtractedElement) => Promise<SerializableAXNode | null>,
+): Promise<ExtractedPageContent> {
+  for (const control of content.controls) {
+    const node = await resolveControl(control);
+    if (node) {
+      applyAXNode(control, node);
+    }
   }
   return content;
 }

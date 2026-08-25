@@ -136,7 +136,31 @@ export class BrowserPage {
     try {
       const title = await page.title();
       const content = (await page.evaluate(observePageExpression())) as ExtractedPageContent;
-      const enriched = enrichPageContentWithAccessibility(content, await page.accessibility.snapshot());
+      const enriched = await enrichPageContentWithAccessibility(content, async (control) => {
+        const handle = await page.evaluateHandle((domPath: number[]) => {
+          let node: Node | null = document.body;
+          for (const index of domPath) {
+            node = node?.childNodes.item(index) ?? null;
+          }
+          return node instanceof Element ? node : null;
+        }, control.domPath);
+        const element = handle.asElement();
+        if (!element) {
+          await handle.dispose();
+          return null;
+        }
+        try {
+          const tag = await element.evaluate((node) =>
+            node instanceof Element ? node.tagName.toLowerCase() : null,
+          );
+          if (tag !== control.tag) {
+            return null;
+          }
+          return await page.accessibility.snapshot({ root: element, interestingOnly: false });
+        } finally {
+          await handle.dispose();
+        }
+      });
       const rendered = renderPageContent(enriched);
       const refs = rendered.refs;
       const viewport = enriched.viewport;

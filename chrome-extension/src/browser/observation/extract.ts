@@ -78,8 +78,8 @@ export function extractPageContent(win: Window): ExtractedPageContent {
 
   const body = win.document.body;
   if (body) {
-    for (const child of Array.from(body.childNodes)) {
-      const node = visitNode(child, win, viewport, controls, refCounter, false);
+    for (const [index, child] of Array.from(body.childNodes).entries()) {
+      const node = visitNode(child, win, viewport, controls, refCounter, false, [index]);
       if (node) {
         rootChildren.push(node);
       }
@@ -97,6 +97,7 @@ export function extractPageContent(win: Window): ExtractedPageContent {
       disabled: false,
       bounds: null,
       ref: null,
+      domPath: [],
       children: rootChildren,
     },
     controls,
@@ -111,6 +112,7 @@ export function visitNode(
   controls: ExtractedElement[],
   refCounter: { next: number },
   insideActionable: boolean,
+  domPath: number[],
 ): ExtractedNode | null {
   if (node.nodeType === TEXT_NODE) {
     const text = node.textContent?.trim() ?? "";
@@ -119,7 +121,7 @@ export function visitNode(
   if (node.nodeType !== ELEMENT_NODE) {
     return null;
   }
-  return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable);
+  return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable, domPath);
 }
 
 export function visitElement(
@@ -129,6 +131,7 @@ export function visitElement(
   controls: ExtractedElement[],
   refCounter: { next: number },
   insideActionable: boolean,
+  domPath: number[],
 ): ExtractedElement | null {
   const tag = el.tagName.toLowerCase();
   if (IGNORED_TAGS.has(tag) || tag === "iframe") {
@@ -155,7 +158,7 @@ export function visitElement(
     if (!bounds) {
       return null;
     }
-    if (isOffscreen(bounds, viewport, style)) {
+    if (isOffscreen(bounds, viewport)) {
       return null;
     }
   }
@@ -174,6 +177,7 @@ export function visitElement(
     disabled,
     bounds,
     ref: actionable ? refCounter.next++ : null,
+    domPath,
     children: [],
   };
   if (interactive) {
@@ -182,8 +186,8 @@ export function visitElement(
 
   const childInsideActionable = insideActionable || actionable;
   if (!sensitive) {
-    for (const child of Array.from(el.childNodes)) {
-      const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable);
+    for (const [index, child] of Array.from(el.childNodes).entries()) {
+      const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable, [...domPath, index]);
       if (childNode) {
         node.children.push(childNode);
       }
@@ -205,7 +209,7 @@ export function rectOf(el: Element): RectBounds | null {
   };
 }
 
-export function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, style: CSSStyleDeclaration): boolean {
+export function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements): boolean {
   const { width, height } = viewport;
   return (
     bounds.x + bounds.width <= 0 ||

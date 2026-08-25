@@ -40,6 +40,7 @@ export interface ExtractedElement {
   disabled: boolean;
   bounds: RectBounds | null;
   ref: number | null;
+  domPath: number[];
   children: ExtractedNode[];
 }
 
