@@ -232,7 +232,10 @@ export class BrowserContext {
 
     const tabsResult = await this.listTabs();
     if (!tabsResult.ok) {
-      return tabsResult;
+      return {
+        ok: false,
+        error: { code: "observation_failed", message: "Browser observation failed" },
+      };
     }
 
     return { ok: true, state: { ...pageResult.state, tabs: tabsResult.tabs } };

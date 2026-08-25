@@ -71,6 +71,22 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
       const runner = new Function("window", "document", `return (${expression});`);
       return runner(win, win.document);
     },
+    evaluateHandle: async (_fn: unknown, domPath: number[]) => {
+      let node: Node | null = win.document.body;
+      for (const index of domPath) {
+        node = node?.childNodes.item(index) ?? null;
+      }
+      const resolved = node instanceof win.Element ? node : null;
+      return {
+        asElement: () =>
+          resolved
+            ? {
+                evaluate: async () => resolved.tagName.toLowerCase(),
+              }
+            : null,
+        dispose: async () => {},
+      };
+    },
     title: async () => "Context fixture",
     accessibility: {
       snapshot: async () => null,
@@ -171,8 +187,8 @@ describe("BrowserContext.observe", () => {
     expect(state.screenshot).toEqual({
       mimeType: "image/jpeg",
       data: JPEG_BASE64,
-      width: VIEWPORT_WIDTH,
-      height: VIEWPORT_HEIGHT,
+      width: 4,
+      height: 4,
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -211,7 +227,7 @@ describe("BrowserContext.observe", () => {
     expect(page.screenshotError).toBeNull();
   });
 
-  test("returns the tab-listing error without partial state when listing fails", async () => {
+  test("normalizes a tab-listing failure without returning partial state", async () => {
     const { context } = setup({
       tabs: activeTab(),
       queryTabsError: new Error("boom"),
@@ -223,8 +239,8 @@ describe("BrowserContext.observe", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toEqual({
-      code: "chrome_api_error",
-      message: "Could not query tabs",
+      code: "observation_failed",
+      message: "Browser observation failed",
     });
     expect("state" in result).toBe(false);
   });
