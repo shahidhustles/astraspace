@@ -64,3 +64,10 @@ export interface RenderedPageContent {
   dom: string;
   refs: ObservedRef[];
 }
+
+export interface ViewportCapture {
+  data: string;
+  mimeType: "image/jpeg";
+  width: number;
+  height: number;
+}
