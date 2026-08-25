@@ -83,7 +83,7 @@ function renderNode(
 ): void {
   if (node.kind === "text") {
     if (!textOwned && node.text) {
-      lines.push(`${"  ".repeat(depth)}${node.text}`);
+      lines.push(`${"  ".repeat(depth)}${escapeSemanticText(node.text)}`);
     }
     return;
   }
@@ -119,7 +119,7 @@ function formatActionable(el: ExtractedElement): string {
     line += ` ${attrs}`;
   }
   if (text) {
-    line += `>${text}`;
+    line += `>${escapeSemanticText(text)}`;
   }
   return `${line} />`;
 }
@@ -131,7 +131,7 @@ function formatElement(el: ExtractedElement): string {
   if (attrs) {
     line += ` ${attrs}`;
   }
-  line += text ? `>${text}` : ">";
+  line += text ? `>${escapeSemanticText(text)}` : ">";
   return line;
 }
 
@@ -139,7 +139,7 @@ function renderAttrs(el: ExtractedElement): string {
   const text = el.name ?? ownedText(el);
   const parts: string[] = [];
   if (el.role && el.role !== el.tag) {
-    parts.push(`role=${el.role}`);
+    parts.push(`role=${formatAttributeValue(el.role)}`);
   }
   const seen = new Set<string>();
   const entries = Object.entries(el.attrs).sort((a, b) => {
@@ -161,12 +161,28 @@ function renderAttrs(el: ExtractedElement): string {
       }
       seen.add(value);
     }
-    parts.push(value === "true" ? key : `${key}=${value}`);
+    parts.push(value === "true" ? key : `${key}=${formatAttributeValue(value)}`);
   }
   if (el.disabled) {
     parts.push("disabled");
   }
   return parts.join(" ");
+}
+
+function escapeSemanticText(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\[/g, "\\u005b")
+    .replace(/\]/g, "\\u005d")
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e");
+}
+
+function formatAttributeValue(value: string): string {
+  const escaped = escapeSemanticText(value);
+  return /^[A-Za-z0-9._:/?&=#%-]+$/.test(escaped) ? escaped : JSON.stringify(escaped);
 }
 
 function ownedText(el: ExtractedElement): string {
