@@ -38,6 +38,7 @@ export interface ExtractedElement {
   interactive: boolean;
   disabled: boolean;
   bounds: RectBounds | null;
+  ref: number | null;
   children: ExtractedNode[];
 }
 
@@ -47,4 +48,17 @@ export interface ExtractedPageContent {
   root: ExtractedElement;
   controls: ExtractedElement[];
   viewport: ViewportMeasurements;
+}
+
+export interface ObservedRef {
+  ref: number;
+  tag: string;
+  role: string | null;
+  attrs: Record<string, string>;
+  bounds: RectBounds | null;
+}
+
+export interface RenderedPageContent {
+  dom: string;
+  refs: ObservedRef[];
 }

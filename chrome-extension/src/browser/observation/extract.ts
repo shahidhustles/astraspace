@@ -72,12 +72,13 @@ const ELEMENT_NODE = 1;
 export function extractPageContent(win: Window): ExtractedPageContent {
   const viewport = measureViewport(win);
   const controls: ExtractedElement[] = [];
+  const refCounter = { next: 1 };
   const rootChildren: ExtractedNode[] = [];
 
   const body = win.document.body;
   if (body) {
     for (const child of Array.from(body.childNodes)) {
-      const node = visitNode(child, win, viewport, controls);
+      const node = visitNode(child, win, viewport, controls, refCounter, false);
       if (node) {
         rootChildren.push(node);
       }
@@ -93,6 +94,7 @@ export function extractPageContent(win: Window): ExtractedPageContent {
       interactive: false,
       disabled: false,
       bounds: null,
+      ref: null,
       children: rootChildren,
     },
     controls,
@@ -105,6 +107,8 @@ function visitNode(
   win: Window,
   viewport: ViewportMeasurements,
   controls: ExtractedElement[],
+  refCounter: { next: number },
+  insideActionable: boolean,
 ): ExtractedNode | null {
   if (node.nodeType === TEXT_NODE) {
     const text = node.textContent?.trim() ?? "";
@@ -113,7 +117,7 @@ function visitNode(
   if (node.nodeType !== ELEMENT_NODE) {
     return null;
   }
-  return visitElement(node as Element, win, viewport, controls);
+  return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable);
 }
 
 function visitElement(
@@ -121,6 +125,8 @@ function visitElement(
   win: Window,
   viewport: ViewportMeasurements,
   controls: ExtractedElement[],
+  refCounter: { next: number },
+  insideActionable: boolean,
 ): ExtractedElement | null {
   const tag = el.tagName.toLowerCase();
   if (IGNORED_TAGS.has(tag) || tag === "iframe") {
@@ -153,22 +159,26 @@ function visitElement(
   }
 
   const interactive = isInteractiveElement(el);
+  const disabled = interactive && isDisabled(el);
+  const actionable = interactive && !disabled && !insideActionable;
   const node: ExtractedElement = {
     kind: "element",
     tag,
     role: el.getAttribute("role"),
     attrs: collectAttrs(el, tag),
     interactive,
-    disabled: interactive && isDisabled(el),
+    disabled,
     bounds,
+    ref: actionable ? refCounter.next++ : null,
     children: [],
   };
   if (interactive) {
     controls.push(node);
   }
 
+  const childInsideActionable = insideActionable || actionable;
   for (const child of Array.from(el.childNodes)) {
-    const childNode = visitNode(child, win, viewport, controls);
+    const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable);
     if (childNode) {
       node.children.push(childNode);
     }
