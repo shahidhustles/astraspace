@@ -68,4 +68,55 @@ body {
   margin: 0;
   background: var(--color-space-950);
   font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+.message-response > :first-child {
+  margin-top: 0;
+}
+
+.message-response > :last-child {
+  margin-bottom: 0;
+}
+
+.message-response p,
+.message-response ul,
+.message-response ol,
+.message-response pre,
+.message-response blockquote {
+  margin: 0 0 12px;
+}
+
+.message-response ul,
+.message-response ol {
+  padding-left: 20px;
+}
+
+.message-response pre,
+.message-response code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.message-response pre {
+  overflow-x: auto;
+  border: 1px solid var(--border-quiet);
+  border-radius: var(--radius-row);
+  background: var(--color-space-900);
+  padding: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

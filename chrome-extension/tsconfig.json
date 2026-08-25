@@ -2,6 +2,9 @@
   "compilerOptions": {
     "target": "ES2023",
     "module": "ESNext",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
     "lib": ["ES2023", "DOM"],
     "jsx": "react-jsx",
     "types": ["vite/client", "chrome"],
@@ -20,4 +23,3 @@
   },
   "include": ["src"]
 }
-

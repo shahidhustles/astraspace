@@ -3,6 +3,7 @@
   "name": "Astra Space",
   "version": "0.0.0",
   "description": "A privacy-first browser agent.",
+  "host_permissions": ["http://127.0.0.1:2000/*"],
   "permissions": ["sidePanel"],
   "action": {
     "default_title": "Open Astra Space"
