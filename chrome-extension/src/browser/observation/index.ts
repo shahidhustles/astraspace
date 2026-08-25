@@ -20,6 +20,7 @@ import {
   isDisabled,
   isInteractiveElement,
   isOffscreen,
+  isSensitiveControl,
   measureViewport,
   rectOf,
   TEXT_NODE,
@@ -69,6 +70,7 @@ const EXTRACT_PREAMBLE = [
   isOffscreen.toString(),
   isInteractiveElement.toString(),
   isDisabled.toString(),
+  isSensitiveControl.toString(),
   collectAttrs.toString(),
   measureViewport.toString(),
 ].join("\n");

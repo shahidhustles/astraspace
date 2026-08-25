@@ -138,7 +138,6 @@ describe("extractPageContent", () => {
     expect(collectText(content.root.children)).toEqual([
       "Fixture page",
       "A visible paragraph with text.",
-      "Fixed note",
       "Name",
       "Password",
       "Agree",
@@ -315,6 +314,83 @@ describe("extractPageContent", () => {
     const json = JSON.stringify(content);
     expect(json).not.toContain("s3cret!");
     expect(JSON.parse(json)).toEqual(content);
+  });
+
+  test("redacts values from controls that carry secret signals", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `
+      <input id="otp" autocomplete="one-time-code" value="654321">
+      <textarea id="token" name="api_token">private-token</textarea>
+      <select id="recovery" name="recovery_code"><option selected>backup-secret</option></select>
+    `;
+    for (const [index, id] of ["otp", "token", "recovery"].entries()) {
+      const el = win.document.getElementById(id);
+      if (!el) throw new Error(`Element #${id} not found`);
+      Object.defineProperty(el, "getBoundingClientRect", {
+        value: () => ({ x: 8, y: 8 + index * 40, width: 180, height: 24 }),
+      });
+    }
+
+    const json = JSON.stringify(extractPageContent(win));
+
+    expect(json).not.toContain("654321");
+    expect(json).not.toContain("private-token");
+    expect(json).not.toContain("backup-secret");
+  });
+
+  test("recognizes property and pointer click behavior without an inline attribute", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `
+      <div id="property-click">Property click</div>
+      <div id="pointer-click" style="cursor: pointer">Pointer click</div>
+    `;
+    const propertyClick = win.document.getElementById("property-click");
+    const pointerClick = win.document.getElementById("pointer-click");
+    if (!(propertyClick instanceof win.HTMLElement) || !pointerClick) {
+      throw new Error("click fixtures missing");
+    }
+    propertyClick.onclick = () => {};
+    for (const [index, el] of [propertyClick, pointerClick].entries()) {
+      Object.defineProperty(el, "getBoundingClientRect", {
+        value: () => ({ x: 8, y: 8 + index * 40, width: 180, height: 24 }),
+      });
+    }
+
+    const content = extractPageContent(win);
+
+    expect(content.controls.map((control) => control.name)).toEqual(["Property click", "Pointer click"]);
+    expect(content.controls.map((control) => control.ref)).toEqual([1, 2]);
+  });
+
+  test("does not treat contenteditable false as actionable", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `
+      <div id="editable" contenteditable="true">Editable</div>
+      <div id="not-editable" contenteditable="false">Not editable</div>
+    `;
+    for (const [index, id] of ["editable", "not-editable"].entries()) {
+      const el = win.document.getElementById(id);
+      if (!el) throw new Error(`Element #${id} not found`);
+      Object.defineProperty(el, "getBoundingClientRect", {
+        value: () => ({ x: 8, y: 8 + index * 40, width: 180, height: 24 }),
+      });
+    }
+
+    const content = extractPageContent(win);
+
+    expect(content.controls.map((control) => control.name)).toEqual(["Editable"]);
   });
 
   test("skips iframe and shadow-root content", () => {

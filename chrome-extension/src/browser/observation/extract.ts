@@ -160,15 +160,16 @@ export function visitElement(
     }
   }
 
-  const interactive = isInteractiveElement(el);
+  const interactive = isInteractiveElement(el, style);
   const disabled = interactive && isDisabled(el);
   const actionable = interactive && !disabled && !insideActionable;
+  const sensitive = isSensitiveControl(el, tag);
   const node: ExtractedElement = {
     kind: "element",
     tag,
     role: computeRole(el),
     name: interactive ? computeAccessibleName(win, el) : null,
-    attrs: collectAttrs(el, tag),
+    attrs: collectAttrs(el, tag, sensitive),
     interactive,
     disabled,
     bounds,
@@ -180,10 +181,12 @@ export function visitElement(
   }
 
   const childInsideActionable = insideActionable || actionable;
-  for (const child of Array.from(el.childNodes)) {
-    const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable);
-    if (childNode) {
-      node.children.push(childNode);
+  if (!sensitive) {
+    for (const child of Array.from(el.childNodes)) {
+      const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable);
+      if (childNode) {
+        node.children.push(childNode);
+      }
     }
   }
   return node;
@@ -203,9 +206,6 @@ export function rectOf(el: Element): RectBounds | null {
 }
 
 export function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, style: CSSStyleDeclaration): boolean {
-  if (style.position === "fixed" || style.position === "sticky") {
-    return false;
-  }
   const { width, height } = viewport;
   return (
     bounds.x + bounds.width <= 0 ||
@@ -215,7 +215,7 @@ export function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, 
   );
 }
 
-export function isInteractiveElement(el: Element): boolean {
+export function isInteractiveElement(el: Element, style?: CSSStyleDeclaration): boolean {
   const tag = el.tagName.toLowerCase();
   if (INTERACTIVE_TAGS.has(tag)) {
     if (tag === "a") {
@@ -227,14 +227,23 @@ export function isInteractiveElement(el: Element): boolean {
   if (role && INTERACTIVE_ROLES.has(role)) {
     return true;
   }
-  if (el.getAttribute("contenteditable") !== null || (el as HTMLElement).isContentEditable) {
+  const contenteditable = el.getAttribute("contenteditable")?.toLowerCase();
+  if (
+    (el as HTMLElement).isContentEditable ||
+    contenteditable === "" ||
+    contenteditable === "true" ||
+    contenteditable === "plaintext-only"
+  ) {
     return true;
   }
   const tabindex = el.getAttribute("tabindex");
   if (tabindex !== null && Number.parseInt(tabindex, 10) >= 0) {
     return true;
   }
-  return el.hasAttribute("onclick");
+  if (el.hasAttribute("onclick") || typeof (el as HTMLElement).onclick === "function") {
+    return true;
+  }
+  return style?.cursor === "pointer";
 }
 
 export function isDisabled(el: Element): boolean {
@@ -244,7 +253,40 @@ export function isDisabled(el: Element): boolean {
   return (el as Element & { disabled?: boolean }).disabled === true;
 }
 
-export function collectAttrs(el: Element, tag: string): Record<string, string> {
+export function isSensitiveControl(el: Element, tag = el.tagName.toLowerCase()): boolean {
+  if (tag !== "input" && tag !== "textarea" && tag !== "select") {
+    return false;
+  }
+  const type = el.getAttribute("type")?.toLowerCase() ?? "";
+  if (type === "password" || type === "hidden") {
+    return true;
+  }
+  const autocomplete = (el.getAttribute("autocomplete") ?? "")
+    .toLowerCase()
+    .split(/\s+/);
+  const sensitiveAutocomplete = new Set([
+    "current-password",
+    "new-password",
+    "one-time-code",
+    "cc-number",
+    "cc-csc",
+    "cc-exp",
+    "cc-exp-month",
+    "cc-exp-year",
+  ]);
+  if (autocomplete.some((token) => sensitiveAutocomplete.has(token))) {
+    return true;
+  }
+  const signals = [
+    el.id,
+    el.getAttribute("name") ?? "",
+    el.getAttribute("aria-label") ?? "",
+    el.getAttribute("placeholder") ?? "",
+  ].join(" ");
+  return /(?:password|passwd|passcode|\bpin\b|\botp\b|one[ _-]?time|token|secret|api[ _-]?key|cvv|cvc|card[ _-]?number|credit[ _-]?card|ssn|social[ _-]?security|recovery[ _-]?code|auth[ _-]?code)/i.test(signals);
+}
+
+export function collectAttrs(el: Element, tag: string, sensitive = isSensitiveControl(el, tag)): Record<string, string> {
   const attrs: Record<string, string> = {};
   for (const name of ATTR_ALLOWLIST) {
     if (el.hasAttribute(name)) {
@@ -256,18 +298,18 @@ export function collectAttrs(el: Element, tag: string): Record<string, string> {
   if (tag === "input") {
     if (type === "checkbox" || type === "radio") {
       attrs.checked = String((el as HTMLInputElement).checked);
-    } else if (type !== "password") {
+    } else if (!sensitive) {
       const value = (el as HTMLInputElement).value;
       if (value !== "") {
         attrs.value = value;
       }
     }
-  } else if (tag === "textarea") {
+  } else if (tag === "textarea" && !sensitive) {
     const value = (el as HTMLTextAreaElement).value;
     if (value !== "") {
       attrs.value = value;
     }
-  } else if (tag === "select") {
+  } else if (tag === "select" && !sensitive) {
     const value = (el as HTMLSelectElement).value;
     if (value !== "") {
       attrs.value = value;
