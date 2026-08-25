@@ -1,6 +1,6 @@
 import { enforceUrlPolicy } from "./url-policy";
 import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
-import type { BrowserError, DiagnosticEvent, TabInfo } from "./types";
+import type { BrowserError, DiagnosticEvent, ObservationResult, TabInfo } from "./types";
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
 
@@ -217,6 +217,25 @@ export class BrowserContext {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     return page.navigate(url);
+  }
+
+  async observe(): Promise<ObservationResult> {
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+
+    const pageResult = await page.observe();
+    if (!pageResult.ok) {
+      return pageResult;
+    }
+
+    const tabsResult = await this.listTabs();
+    if (!tabsResult.ok) {
+      return tabsResult;
+    }
+
+    return { ok: true, state: { ...pageResult.state, tabs: tabsResult.tabs } };
   }
 
   async goBack(): Promise<NavResult> {

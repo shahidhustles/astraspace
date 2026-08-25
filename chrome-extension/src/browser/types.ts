@@ -125,6 +125,19 @@ export interface PageObservation {
 
 export type ObserveResult = { ok: true; state: PageObservation } | { ok: false; error: BrowserError };
 
+export interface BrowserState {
+  tabId: number;
+  url: string;
+  title: string;
+  tabs: TabInfo[];
+  scroll: ScrollState;
+  dom: string;
+  refs: ObservedRef[];
+  screenshot: ViewportCapture;
+}
+
+export type ObservationResult = { ok: true; state: BrowserState } | { ok: false; error: BrowserError };
+
 export type DiagnosticEvent =
   | { type: "attach_started"; tabId: number }
   | { type: "attach_ok"; tabId: number }
