@@ -15,7 +15,12 @@ export interface UrlDeniedError {
   url: string;
 }
 
-export type BrowserError = InvalidUrlError | UnsupportedPageError | UrlDeniedError;
+export interface AttachFailedError {
+  code: "attach_failed";
+  message: string;
+}
+
+export type BrowserError = InvalidUrlError | UnsupportedPageError | UrlDeniedError | AttachFailedError;
 
 export type UrlPolicyResult =
   | { ok: true; url: string }
