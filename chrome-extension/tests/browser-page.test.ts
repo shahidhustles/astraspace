@@ -249,10 +249,33 @@ describe("BrowserPage", () => {
     const { deps, browser } = fakeDeps();
     const page = new BrowserPage(7, "https://example.com", deps);
 
-    await page.disconnect();
+    const result = await page.disconnect();
 
+    expect(result).toEqual({ ok: true });
     expect(browser.disconnectCalls).toBe(0);
     expect(page.attached).toBe(false);
+  });
+
+  test("disconnect reports a failure and still clears the wrapper when Browser.disconnect throws", async () => {
+    const { deps, browser } = fakeDeps();
+    const page = new BrowserPage(7, "https://example.com", deps);
+    await page.attach();
+    browser.disconnect = async () => {
+      browser.disconnectCalls += 1;
+      throw new Error("connection lost");
+    };
+
+    const result = await page.disconnect();
+    const second = await page.disconnect();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "disconnect_failed", message: "Failed to disconnect from tab" },
+    });
+    expect(second).toEqual({ ok: true });
+    expect(browser.disconnectCalls).toBe(1);
+    expect(page.attached).toBe(false);
+    expect(page.page).toBeNull();
   });
 
   test("navigate goes to an allowed destination and reports the final URL", async () => {

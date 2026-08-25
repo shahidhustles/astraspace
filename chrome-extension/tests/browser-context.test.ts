@@ -59,14 +59,20 @@ function fakeBrowser(page: FakePage = fakePage()): FakeBrowser {
 interface FakeEvents {
   emitUpdated(tab: chrome.tabs.Tab): void;
   emitActivated(tabId: number): void;
+  emitRemoved(tabId: number): void;
+  emitDetached(tabId: number): void;
   updatedListenerCount: () => number;
   activatedListenerCount: () => number;
+  removedListenerCount: () => number;
+  detachedListenerCount: () => number;
 }
 
 interface FakeDeps {
   context: BrowserContext;
   events: DiagnosticEvent[];
   connectTabCalls: () => number;
+  removeTabCalls: () => number[];
+  browsers: FakeBrowser[];
   api: FakeEvents;
   page: FakePage;
 }
@@ -78,19 +84,27 @@ function setup(overrides: {
   connect?: PageDeps["connect"];
   createTab?: (url: string) => Promise<chrome.tabs.Tab>;
   updateTab?: (tabId: number) => Promise<chrome.tabs.Tab>;
+  removeTab?: (tabId: number) => Promise<void>;
   timeoutMs?: number;
 } = {}): FakeDeps {
   let connectTabCalls = 0;
   const page = fakePage();
-  const browser = fakeBrowser(page);
+  const browsers: FakeBrowser[] = [];
+  const removedTabIds: number[] = [];
   const events: DiagnosticEvent[] = [];
   const updatedListeners = new Set<
     (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void
   >();
   const activatedListeners = new Set<(info: chrome.tabs.OnActivatedInfo) => void>();
+  const removedListeners = new Set<(tabId: number, removeInfo: chrome.tabs.OnRemovedInfo) => void>();
+  const detachedListeners = new Set<(source: chrome.debugger.Debuggee, reason: string) => void>();
 
   const pageDeps: PageDeps = {
-    connect: async () => browser,
+    connect: async () => {
+      const browser = fakeBrowser(page);
+      browsers.push(browser);
+      return browser;
+    },
     connectTab: async () => {
       connectTabCalls += 1;
       return {} as never;
@@ -103,6 +117,9 @@ function setup(overrides: {
     queryTabs: async () => overrides.allTabs ?? [],
     createTab: overrides.createTab ?? (async (url) => ({ id: 42, url }) as chrome.tabs.Tab),
     updateTab: overrides.updateTab ?? (async (tabId) => ({ id: tabId, url: "https://example.com" }) as chrome.tabs.Tab),
+    removeTab: overrides.removeTab ?? (async (tabId) => {
+      removedTabIds.push(tabId);
+    }),
     onUpdated: (listener) => {
       updatedListeners.add(listener);
       return () => updatedListeners.delete(listener);
@@ -110,6 +127,14 @@ function setup(overrides: {
     onActivated: (listener) => {
       activatedListeners.add(listener);
       return () => activatedListeners.delete(listener);
+    },
+    onRemoved: (listener) => {
+      removedListeners.add(listener);
+      return () => removedListeners.delete(listener);
+    },
+    onDetach: (listener) => {
+      detachedListeners.add(listener);
+      return () => detachedListeners.delete(listener);
     },
     diagnostics: (event) => events.push(event),
     pageDeps,
@@ -127,11 +152,23 @@ function setup(overrides: {
         listener({ tabId, windowId: 1 });
       }
     },
+    emitRemoved: (tabId) => {
+      for (const listener of removedListeners) {
+        listener(tabId, { isWindowClosing: false, windowId: 1 });
+      }
+    },
+    emitDetached: (tabId) => {
+      for (const listener of detachedListeners) {
+        listener({ tabId }, "target_closed");
+      }
+    },
     updatedListenerCount: () => updatedListeners.size,
     activatedListenerCount: () => activatedListeners.size,
+    removedListenerCount: () => removedListeners.size,
+    detachedListenerCount: () => detachedListeners.size,
   };
 
-  return { context, events, connectTabCalls: () => connectTabCalls, api, page };
+  return { context, events, connectTabCalls: () => connectTabCalls, removeTabCalls: () => removedTabIds, browsers, api, page };
 }
 
 function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] {
@@ -635,5 +672,192 @@ describe("BrowserContext", () => {
       ok: false,
       error: { code: "selected_tab_unavailable", message: "No selected live connection" },
     });
+  });
+
+  test("closeTab disconnects and removes only the requested tab", async () => {
+    let nextId = 10;
+    const { context, api, browsers, removeTabCalls } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    const result = await context.closeTab(10);
+
+    expect(result).toEqual({ ok: true, tabId: 10 });
+    expect(removeTabCalls()).toEqual([10]);
+    expect(browsers[0].disconnectCalls).toBe(1);
+    expect(browsers[1].disconnectCalls).toBe(0);
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBe(11);
+  });
+
+  test("closeTab clears the selection when the selected tab is closed", async () => {
+    const { context, api } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+
+    const result = await context.closeTab(7);
+
+    expect(result).toEqual({ ok: true, tabId: 7 });
+    expect(context.selectedTabId).toBeNull();
+    expect(context.tabCount).toBe(0);
+  });
+
+  test("closeTab returns missing_tab for an unmanaged tab", async () => {
+    const { context, removeTabCalls } = setup({});
+
+    const result = await context.closeTab(99);
+
+    expect(result).toEqual({ ok: false, error: { code: "missing_tab", message: "No such tab" } });
+    expect(removeTabCalls()).toEqual([]);
+  });
+
+  test("closeTab returns missing_tab when chrome cannot remove the tab", async () => {
+    const { context, api } = setup({
+      tabs: activeTab(),
+      removeTab: async () => {
+        throw new Error("No tab with id: 7");
+      },
+    });
+    await context.useActiveTab();
+
+    const result = await context.closeTab(7);
+
+    expect(result).toEqual({ ok: false, error: { code: "missing_tab", message: "No such tab" } });
+    expect(context.tabCount).toBe(0);
+  });
+
+  test("closeTab reports a disconnect failure but still removes the tab", async () => {
+    let nextId = 10;
+    const { context, api, browsers, removeTabCalls } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const pending = context.openTab("https://a.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    await pending;
+
+    const failingBrowser = browsers[0];
+    const originalDisconnect = failingBrowser.disconnect.bind(failingBrowser);
+    failingBrowser.disconnect = async () => {
+      await originalDisconnect();
+      throw new Error("connection lost");
+    };
+
+    const result = await context.closeTab(10);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "disconnect_failed", message: "Failed to disconnect from tab" },
+    });
+    expect(removeTabCalls()).toEqual([10]);
+    expect(context.tabCount).toBe(0);
+  });
+
+  test("a tab-removal event removes the connection and clears selection only for the selected tab", async () => {
+    let nextId = 10;
+    const { context, api } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    api.emitRemoved(10);
+    api.emitRemoved(10);
+
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBe(11);
+
+    api.emitRemoved(11);
+
+    expect(context.tabCount).toBe(0);
+    expect(context.selectedTabId).toBeNull();
+  });
+
+  test("a debugger detach removes only the named connection and allows reattach", async () => {
+    let nextId = 10;
+    const { context, api, connectTabCalls } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    api.emitDetached(10);
+
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBe(11);
+    expect(connectTabCalls()).toBe(2);
+
+    const reopened = context.openTab("https://a.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 12, url: "https://a.example" });
+
+    expect(await reopened).toEqual({ ok: true, tabId: 12 });
+    expect(connectTabCalls()).toBe(3);
+  });
+
+  test("cleanup disconnects every tab, removes listeners, and empties the registry", async () => {
+    let nextId = 10;
+    const { context, api, browsers } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    const result = await context.cleanup();
+    const secondResult = await context.cleanup();
+
+    expect(result).toEqual({ failures: [] });
+    expect(secondResult).toEqual({ failures: [] });
+    expect(browsers[0].disconnectCalls).toBe(1);
+    expect(browsers[1].disconnectCalls).toBe(1);
+    expect(context.tabCount).toBe(0);
+    expect(context.selectedTabId).toBeNull();
+    expect(api.removedListenerCount()).toBe(0);
+    expect(api.detachedListenerCount()).toBe(0);
+  });
+
+  test("cleanup reports disconnect failures and still empties the registry", async () => {
+    const { context, browsers } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+    const failingBrowser = browsers[0];
+    failingBrowser.disconnect = async () => {
+      throw new Error("connection lost");
+    };
+
+    const result = await context.cleanup();
+
+    expect(result).toEqual({
+      failures: [{ code: "disconnect_failed", message: "Failed to disconnect from tab" }],
+    });
+    expect(context.tabCount).toBe(0);
+    expect(context.selectedTabId).toBeNull();
   });
 });

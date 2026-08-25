@@ -19,6 +19,8 @@ export type AttachResult = { ok: true; tabId: number } | { ok: false; error: Bro
 
 export type NavResult = { ok: true; url: string } | { ok: false; error: BrowserError };
 
+export type DisconnectResult = { ok: true } | { ok: false; error: BrowserError };
+
 export class BrowserPage {
   readonly tabId: number;
   readonly url: string;
@@ -77,12 +79,18 @@ export class BrowserPage {
     }
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(): Promise<DisconnectResult> {
     const browser = this.browser;
     this.browser = null;
     this.puppeteerPage = null;
-    if (browser) {
+    if (!browser) {
+      return { ok: true };
+    }
+    try {
       await browser.disconnect();
+      return { ok: true };
+    } catch {
+      return { ok: false, error: { code: "disconnect_failed", message: "Failed to disconnect from tab" } };
     }
   }
 

@@ -71,6 +71,11 @@ export interface NavigationFailedError {
   message: string;
 }
 
+export interface DisconnectFailedError {
+  code: "disconnect_failed";
+  message: string;
+}
+
 export interface TabInfo {
   tabId: number;
   url: string;
@@ -93,7 +98,8 @@ export type BrowserError =
   | SelectedTabUnavailableError
   | UnsupportedRedirectError
   | NavigationTimeoutError
-  | NavigationFailedError;
+  | NavigationFailedError
+  | DisconnectFailedError;
 
 export type UrlPolicyResult =
   | { ok: true; url: string }

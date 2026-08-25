@@ -4,6 +4,10 @@ import type { BrowserError, DiagnosticEvent, TabInfo } from "./types";
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
 
+export type CloseResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
+
+export type CleanupResult = { failures: BrowserError[] };
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export interface ContextDeps {
@@ -11,10 +15,13 @@ export interface ContextDeps {
   queryTabs: () => Promise<chrome.tabs.Tab[]>;
   createTab: (url: string) => Promise<chrome.tabs.Tab>;
   updateTab: (tabId: number) => Promise<chrome.tabs.Tab | undefined>;
+  removeTab: (tabId: number) => Promise<void>;
   onUpdated: (
     listener: (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void,
   ) => () => void;
   onActivated: (listener: (info: chrome.tabs.OnActivatedInfo) => void) => () => void;
+  onRemoved: (listener: (tabId: number, removeInfo: chrome.tabs.OnRemovedInfo) => void) => () => void;
+  onDetach: (listener: (source: chrome.debugger.Debuggee, reason: string) => void) => () => void;
   diagnostics: (event: DiagnosticEvent) => void;
   pageDeps?: PageDeps;
   timeoutMs: number;
@@ -29,6 +36,7 @@ export class BrowserContext {
   private readonly pages = new Map<number, BrowserPage>();
   private readonly pending = new Map<number, Promise<AttachResult>>();
   private readonly deps: ContextDeps;
+  private readonly stopListeners: (() => void)[] = [];
   private selectedTab: number | null = null;
 
   constructor(deps: Partial<ContextDeps> = {}) {
@@ -37,6 +45,7 @@ export class BrowserContext {
       queryTabs: () => chrome.tabs.query({}),
       createTab: (url) => chrome.tabs.create({ url, active: true }),
       updateTab: (tabId) => chrome.tabs.update(tabId, { active: true }),
+      removeTab: (tabId) => chrome.tabs.remove(tabId),
       onUpdated: (listener) => {
         chrome.tabs.onUpdated.addListener(listener);
         return () => chrome.tabs.onUpdated.removeListener(listener);
@@ -45,10 +54,21 @@ export class BrowserContext {
         chrome.tabs.onActivated.addListener(listener);
         return () => chrome.tabs.onActivated.removeListener(listener);
       },
+      onRemoved: (listener) => {
+        chrome.tabs.onRemoved.addListener(listener);
+        return () => chrome.tabs.onRemoved.removeListener(listener);
+      },
+      onDetach: (listener) => {
+        chrome.debugger.onDetach.addListener(listener);
+        return () => chrome.debugger.onDetach.removeListener(listener);
+      },
       diagnostics: () => {},
       timeoutMs: DEFAULT_TIMEOUT_MS,
       ...deps,
     };
+
+    this.stopListeners.push(this.deps.onRemoved((tabId) => this.handleTabRemoved(tabId)));
+    this.stopListeners.push(this.deps.onDetach((source) => this.handleDebuggerDetach(source)));
   }
 
   get selectedTabId(): number | null {
@@ -208,6 +228,62 @@ export class BrowserContext {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     return page.reload();
+  }
+
+  async closeTab(tabId: number): Promise<CloseResult> {
+    const page = this.pages.get(tabId);
+    if (!page) {
+      return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
+    }
+
+    const disconnected = await page.disconnect();
+    this.removeTabRecord(tabId);
+
+    try {
+      await this.deps.removeTab(tabId);
+    } catch {
+      return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
+    }
+
+    if (!disconnected.ok) {
+      return { ok: false, error: disconnected.error };
+    }
+    return { ok: true, tabId };
+  }
+
+  async cleanup(): Promise<CleanupResult> {
+    const failures: BrowserError[] = [];
+    for (const page of this.pages.values()) {
+      const result = await page.disconnect();
+      if (!result.ok) {
+        failures.push(result.error);
+      }
+    }
+    for (const stop of this.stopListeners.splice(0)) {
+      stop();
+    }
+    this.pages.clear();
+    this.pending.clear();
+    this.selectedTab = null;
+    return { failures };
+  }
+
+  private handleTabRemoved(tabId: number): void {
+    this.removeTabRecord(tabId);
+  }
+
+  private handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
+    if (source.tabId !== undefined) {
+      this.removeTabRecord(source.tabId);
+    }
+  }
+
+  private removeTabRecord(tabId: number): void {
+    this.pages.delete(tabId);
+    this.pending.delete(tabId);
+    if (this.selectedTab === tabId) {
+      this.selectedTab = null;
+    }
   }
 
   private selectedPage(): BrowserPage | null {
