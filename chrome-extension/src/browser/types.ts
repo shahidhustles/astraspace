@@ -1,3 +1,5 @@
+import type { ObservedRef, ScrollState, ViewportCapture } from "./observation/types";
+
 export interface InvalidUrlError {
   code: "invalid_url";
   message: string;
@@ -76,6 +78,11 @@ export interface DisconnectFailedError {
   message: string;
 }
 
+export interface ObservationFailedError {
+  code: "observation_failed";
+  message: string;
+}
+
 export interface TabInfo {
   tabId: number;
   url: string;
@@ -99,11 +106,24 @@ export type BrowserError =
   | UnsupportedRedirectError
   | NavigationTimeoutError
   | NavigationFailedError
-  | DisconnectFailedError;
+  | DisconnectFailedError
+  | ObservationFailedError;
 
 export type UrlPolicyResult =
   | { ok: true; url: string }
   | { ok: false; error: BrowserError };
+
+export interface PageObservation {
+  tabId: number;
+  url: string;
+  title: string;
+  scroll: ScrollState;
+  dom: string;
+  refs: ObservedRef[];
+  screenshot: ViewportCapture;
+}
+
+export type ObserveResult = { ok: true; state: PageObservation } | { ok: false; error: BrowserError };
 
 export type DiagnosticEvent =
   | { type: "attach_started"; tabId: number }

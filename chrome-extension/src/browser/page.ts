@@ -4,10 +4,19 @@ import {
   type Browser,
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import {
+  buildHighlightOverlayExpression,
+  enrichPageContentWithAccessibility,
+  observePageExpression,
+  removeHighlightOverlayExpression,
+  renderPageContent,
+  type ExtractedPageContent,
+} from "./observation";
 import { enforceUrlPolicy } from "./url-policy";
-import type { BrowserError, UrlPolicyResult } from "./types";
+import type { BrowserError, ObserveResult, UrlPolicyResult } from "./types";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
+const SCREENSHOT_QUALITY = 85;
 
 export interface PageDeps {
   connect: (options: Parameters<typeof connect>[0]) => Promise<Browser>;
@@ -108,6 +117,57 @@ export class BrowserPage {
 
   async reload(): Promise<NavResult> {
     return this.runNavigation((page) => page.reload(this.navOptions()));
+  }
+
+  async observe(): Promise<ObserveResult> {
+    if (!this.attached || !this.puppeteerPage) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    if (!this.policy.ok) {
+      return { ok: false, error: this.policy.error };
+    }
+    const page = this.puppeteerPage;
+    const url = page.url();
+    const currentPolicy = enforceUrlPolicy(url);
+    if (!currentPolicy.ok) {
+      return { ok: false, error: currentPolicy.error };
+    }
+
+    try {
+      const title = await page.title();
+      const content = (await page.evaluate(observePageExpression())) as ExtractedPageContent;
+      const enriched = enrichPageContentWithAccessibility(content, await page.accessibility.snapshot());
+      const rendered = renderPageContent(enriched);
+      const refs = rendered.refs;
+      const viewport = enriched.viewport;
+
+      await page.evaluate(buildHighlightOverlayExpression(refs, viewport));
+      let data: string;
+      try {
+        data = (await page.screenshot({
+          type: "jpeg",
+          quality: SCREENSHOT_QUALITY,
+          encoding: "base64",
+        })) as string;
+      } finally {
+        await page.evaluate(removeHighlightOverlayExpression());
+      }
+
+      return {
+        ok: true,
+        state: {
+          tabId: this.tabId,
+          url,
+          title,
+          scroll: viewport.scroll,
+          dom: rendered.dom,
+          refs,
+          screenshot: { mimeType: "image/jpeg", data, width: viewport.width, height: viewport.height },
+        },
+      };
+    } catch {
+      return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+    }
   }
 
   private navOptions() {

@@ -7,7 +7,7 @@ import type {
 } from "./types";
 import { computeAccessibleName, computeRole } from "./accessibility";
 
-const IGNORED_TAGS = new Set([
+export const IGNORED_TAGS = new Set([
   "script",
   "style",
   "link",
@@ -19,7 +19,7 @@ const IGNORED_TAGS = new Set([
   "svg",
 ]);
 
-const INTERACTIVE_TAGS = new Set([
+export const INTERACTIVE_TAGS = new Set([
   "a",
   "button",
   "input",
@@ -51,7 +51,7 @@ export const INTERACTIVE_ROLES = new Set([
   "treeitem",
 ]);
 
-const ATTR_ALLOWLIST = new Set([
+export const ATTR_ALLOWLIST = new Set([
   "aria-checked",
   "aria-expanded",
   "aria-haspopup",
@@ -66,9 +66,9 @@ const ATTR_ALLOWLIST = new Set([
   "type",
 ]);
 
-const EDGE_EPSILON = 1;
-const TEXT_NODE = 3;
-const ELEMENT_NODE = 1;
+export const EDGE_EPSILON = 1;
+export const TEXT_NODE = 3;
+export const ELEMENT_NODE = 1;
 
 export function extractPageContent(win: Window): ExtractedPageContent {
   const viewport = measureViewport(win);
@@ -104,7 +104,7 @@ export function extractPageContent(win: Window): ExtractedPageContent {
   };
 }
 
-function visitNode(
+export function visitNode(
   node: Node,
   win: Window,
   viewport: ViewportMeasurements,
@@ -122,7 +122,7 @@ function visitNode(
   return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable);
 }
 
-function visitElement(
+export function visitElement(
   el: Element,
   win: Window,
   viewport: ViewportMeasurements,
@@ -189,7 +189,7 @@ function visitElement(
   return node;
 }
 
-function rectOf(el: Element): RectBounds | null {
+export function rectOf(el: Element): RectBounds | null {
   const rect = el.getBoundingClientRect();
   if (!rect || rect.width <= 0 || rect.height <= 0) {
     return null;
@@ -202,7 +202,7 @@ function rectOf(el: Element): RectBounds | null {
   };
 }
 
-function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, style: CSSStyleDeclaration): boolean {
+export function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, style: CSSStyleDeclaration): boolean {
   if (style.position === "fixed" || style.position === "sticky") {
     return false;
   }
@@ -215,7 +215,7 @@ function isOffscreen(bounds: RectBounds, viewport: ViewportMeasurements, style: 
   );
 }
 
-function isInteractiveElement(el: Element): boolean {
+export function isInteractiveElement(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
   if (INTERACTIVE_TAGS.has(tag)) {
     if (tag === "a") {
@@ -237,14 +237,14 @@ function isInteractiveElement(el: Element): boolean {
   return el.hasAttribute("onclick");
 }
 
-function isDisabled(el: Element): boolean {
+export function isDisabled(el: Element): boolean {
   if (el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled")) {
     return true;
   }
   return (el as Element & { disabled?: boolean }).disabled === true;
 }
 
-function collectAttrs(el: Element, tag: string): Record<string, string> {
+export function collectAttrs(el: Element, tag: string): Record<string, string> {
   const attrs: Record<string, string> = {};
   for (const name of ATTR_ALLOWLIST) {
     if (el.hasAttribute(name)) {
@@ -278,7 +278,7 @@ function collectAttrs(el: Element, tag: string): Record<string, string> {
   return attrs;
 }
 
-function measureViewport(win: Window): ViewportMeasurements {
+export function measureViewport(win: Window): ViewportMeasurements {
   const doc = win.document;
   const documentElement = doc.documentElement;
   const width = win.innerWidth || documentElement?.clientWidth || 0;

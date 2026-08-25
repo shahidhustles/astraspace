@@ -39,9 +39,9 @@ const CONTROL_ROLES = new Set([
   "treeitem",
 ]);
 
-const IGNORED_TEXT_TAGS = new Set(["script", "style", "svg", "template", "noscript"]);
+export const IGNORED_TEXT_TAGS = new Set(["script", "style", "svg", "template", "noscript"]);
 
-function collapse(value: string): string {
+export function collapse(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
@@ -70,7 +70,7 @@ export function computeRole(el: Element): string | null {
   }
 }
 
-function inputRole(type: string | null): string {
+export function inputRole(type: string | null): string {
   switch (type) {
     case "button":
     case "submit":
@@ -153,7 +153,7 @@ export function computeAccessibleName(win: Window, el: Element): string | null {
   return null;
 }
 
-function associatedLabel(win: Window, el: Element): Element | null {
+export function associatedLabel(win: Window, el: Element): Element | null {
   const id = el.id;
   if (id) {
     const labels = Array.from(win.document.querySelectorAll("label"));
@@ -165,7 +165,7 @@ function associatedLabel(win: Window, el: Element): Element | null {
   return el.closest("label");
 }
 
-function descendantText(root: Element): string {
+export function descendantText(root: Element): string {
   const parts: string[] = [];
   const walk = (node: Node): void => {
     if (node.nodeType === 3) {

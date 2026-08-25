@@ -12,12 +12,12 @@ export interface CaptureOptions {
   document: Document;
 }
 
-const OVERLAY_CLASS = "astra-obs-overlay";
-const TARGET_CLASS = "astra-obs-target";
-const BADGE_CLASS = "astra-obs-badge";
-const STYLE_ID = "astra-obs-style";
+export const OVERLAY_CLASS = "astra-obs-overlay";
+export const TARGET_CLASS = "astra-obs-target";
+export const BADGE_CLASS = "astra-obs-badge";
+export const STYLE_ID = "astra-obs-style";
 
-const OVERLAY_CSS = `
+export const OVERLAY_CSS = `
 .${OVERLAY_CLASS} {
   position: fixed;
   inset: 0;
@@ -57,9 +57,11 @@ export function clipToViewport(bounds: RectBounds, width: number, height: number
   return { x, y, width: right - x, height: bottom - y };
 }
 
-export async function captureHighlightedViewport(options: CaptureOptions): Promise<ViewportCapture> {
-  const { refs, viewport, captureScreenshot, document: doc } = options;
-
+export function buildHighlightOverlay(
+  doc: Document,
+  refs: ObservedRef[],
+  viewport: ViewportMeasurements,
+): HTMLElement {
   const style = doc.createElement("style");
   style.id = STYLE_ID;
   style.textContent = OVERLAY_CSS;
@@ -79,16 +81,29 @@ export async function captureHighlightedViewport(options: CaptureOptions): Promi
 
   doc.documentElement.appendChild(style);
   doc.documentElement.appendChild(overlay);
+  return overlay;
+}
+
+export function removeHighlightOverlay(doc: Document): void {
+  doc.getElementById(STYLE_ID)?.remove();
+  for (const node of doc.querySelectorAll(`.${OVERLAY_CLASS}, .${TARGET_CLASS}, .${BADGE_CLASS}`)) {
+    node.remove();
+  }
+}
+
+export async function captureHighlightedViewport(options: CaptureOptions): Promise<ViewportCapture> {
+  const { refs, viewport, captureScreenshot, document: doc } = options;
+
+  buildHighlightOverlay(doc, refs, viewport);
   try {
     const data = await captureScreenshot();
     return { data, mimeType: "image/jpeg", width: viewport.width, height: viewport.height };
   } finally {
-    style.remove();
-    overlay.remove();
+    removeHighlightOverlay(doc);
   }
 }
 
-function buildLabel(doc: Document, ref: number, bounds: RectBounds): HTMLElement {
+export function buildLabel(doc: Document, ref: number, bounds: RectBounds): HTMLElement {
   const target = doc.createElement("div");
   target.className = TARGET_CLASS;
   target.dataset.ref = String(ref);
