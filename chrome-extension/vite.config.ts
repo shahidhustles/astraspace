@@ -5,6 +5,9 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   base: "./",
+  define: {
+    "process.version": "undefined",
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
@@ -13,6 +16,11 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      external: (id, importer) =>
+        id === "@puppeteer/browsers" ||
+        id === "chromium-bidi/lib/bidiMapper/BidiMapper.js" ||
+        id.includes("/puppeteer-core/lib/puppeteer/node/") ||
+        (id.startsWith("node:") && importer?.includes("/puppeteer-core/") === true),
       input: {
         index: fileURLToPath(new URL("./index.html", import.meta.url)),
         background: fileURLToPath(new URL("./src/background.ts", import.meta.url)),

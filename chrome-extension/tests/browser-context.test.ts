@@ -368,7 +368,9 @@ describe("BrowserContext", () => {
   });
 
   test("openTab creates a tab, waits for its URL, and attaches it", async () => {
-    const { context, api } = setup({});
+    const { context, api } = setup({
+      createTab: async () => ({ id: 42, url: "about:blank" }) as chrome.tabs.Tab,
+    });
 
     const pending = context.openTab("https://example.com/start");
     await Promise.resolve();
@@ -378,6 +380,18 @@ describe("BrowserContext", () => {
     expect(await pending).toEqual({ ok: true, tabId: 42 });
     expect(context.selectedTabId).toBe(42);
     expect(context.tabCount).toBe(1);
+  });
+
+  test("openTab attaches when the created tab already has a controllable URL", async () => {
+    const { context, connectTabCalls } = setup({
+      createTab: async (url) => ({ id: 42, status: "complete", url }) as chrome.tabs.Tab,
+      timeoutMs: 10,
+    });
+
+    const result = await context.openTab("https://example.com/ready");
+
+    expect(result).toEqual({ ok: true, tabId: 42 });
+    expect(connectTabCalls()).toBe(1);
   });
 
   test("openTab rejects a blocked URL without creating a tab", async () => {
@@ -399,7 +413,11 @@ describe("BrowserContext", () => {
   });
 
   test("openTab times out when the tab never reaches a controllable URL and keeps the previous selection", async () => {
-    const { context, api } = setup({ tabs: activeTab(), timeoutMs: 30 });
+    const { context, api } = setup({
+      tabs: activeTab(),
+      createTab: async () => ({ id: 42, url: "about:blank" }) as chrome.tabs.Tab,
+      timeoutMs: 30,
+    });
     await context.useActiveTab();
 
     const result = await context.openTab("https://example.com/slow");
@@ -718,7 +736,7 @@ describe("BrowserContext", () => {
     expect(removeTabCalls()).toEqual([]);
   });
 
-  test("closeTab returns missing_tab when chrome cannot remove the tab", async () => {
+  test("closeTab returns missing_tab when Chrome reports an unknown tab", async () => {
     const { context, api } = setup({
       tabs: activeTab(),
       removeTab: async () => {
@@ -730,7 +748,27 @@ describe("BrowserContext", () => {
     const result = await context.closeTab(7);
 
     expect(result).toEqual({ ok: false, error: { code: "missing_tab", message: "No such tab" } });
-    expect(context.tabCount).toBe(0);
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBe(7);
+  });
+
+  test("closeTab preserves the live connection when Chrome cannot remove the tab", async () => {
+    const { context } = setup({
+      tabs: activeTab(),
+      removeTab: async () => {
+        throw new Error("Tab is busy");
+      },
+    });
+    await context.useActiveTab();
+
+    const result = await context.closeTab(7);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "chrome_api_error", message: "Could not close tab" },
+    });
+    expect(context.selectedTabId).toBe(7);
+    expect(context.tabCount).toBe(1);
   });
 
   test("closeTab reports a disconnect failure but still removes the tab", async () => {

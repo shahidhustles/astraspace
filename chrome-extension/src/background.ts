@@ -1,7 +1,19 @@
 import { BrowserContext } from "./browser/context";
+import {
+  handleBrowserRuntimeMessage,
+  isAttachActiveTabMessage,
+} from "./browser/runtime";
 
 export const browserContext = new BrowserContext({
-  diagnostics: (event) => console.log("browser", event),
+  diagnostics: (event) => console.info("browser", event),
+});
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!isAttachActiveTabMessage(message)) {
+    return false;
+  }
+  void handleBrowserRuntimeMessage(message, browserContext).then(sendResponse);
+  return true;
 });
 
 chrome.sidePanel

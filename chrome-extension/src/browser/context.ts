@@ -141,6 +141,11 @@ export class BrowserContext {
       return { ok: false, error: { code: "chrome_api_error", message: "Created tab has no id or URL" } };
     }
 
+    const createdPolicy = enforceUrlPolicy(created.url);
+    if (createdPolicy.ok) {
+      return this.attachTab(created.id, createdPolicy.url);
+    }
+
     let reached: chrome.tabs.Tab;
     try {
       const handle = this.waitFor<{ tabId: number; tab: chrome.tabs.Tab }>(
@@ -236,15 +241,17 @@ export class BrowserContext {
       return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
     }
 
-    const disconnected = await page.disconnect();
-    this.removeTabRecord(tabId);
-
     try {
       await this.deps.removeTab(tabId);
-    } catch {
-      return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
+    } catch (error) {
+      if (error instanceof Error && /no tab with id/i.test(error.message)) {
+        return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
+      }
+      return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
     }
 
+    const disconnected = await page.disconnect();
+    this.removeTabRecord(tabId);
     if (!disconnected.ok) {
       return { ok: false, error: disconnected.error };
     }
