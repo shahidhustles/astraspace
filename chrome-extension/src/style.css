@@ -1,16 +1,71 @@
+@import "tailwindcss";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+
 :root {
-  color: #f5f5f5;
-  background: #111111;
-  font-family: Inter, system-ui, sans-serif;
+  color-scheme: dark;
+  --color-space-950: #05030d;
+  --color-space-900: #090617;
+  --color-space-850: #0e0a21;
+  --color-space-800: #15102d;
+  --color-ink-50: #f5f2ff;
+  --color-ink-200: #d5cfea;
+  --color-ink-400: #9992ad;
+  --color-ink-600: #625c72;
+  --color-orbit-400: #a89bff;
+  --color-orbit-500: #8878f2;
+  --color-orbit-700: #5145b8;
+  --color-scan-400: #72d8e8;
+  --color-caution-400: #f1bd72;
+  --color-block-400: #f1849d;
+  --color-success-400: #83d7b0;
+  --color-focus-ring: #c0b6ff;
+  --border-quiet: rgba(213, 207, 234, 0.1);
+  --border-active: rgba(168, 155, 255, 0.42);
+  --rim-panel: inset 0 1px 0 rgba(255, 255, 255, 0.055);
+  --rim-active: inset 0 0 24px rgba(168, 155, 255, 0.07);
+  --radius-control: 6px;
+  --radius-row: 10px;
+  --radius-panel: 16px;
+  --radius-frame: 20px;
+}
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui;
+  --color-space-950: var(--color-space-950);
+  --color-space-900: var(--color-space-900);
+  --color-space-850: var(--color-space-850);
+  --color-space-800: var(--color-space-800);
+  --color-ink-50: var(--color-ink-50);
+  --color-ink-200: var(--color-ink-200);
+  --color-ink-400: var(--color-ink-400);
+  --color-ink-600: var(--color-ink-600);
+  --color-orbit-400: var(--color-orbit-400);
+  --color-orbit-500: var(--color-orbit-500);
+  --color-orbit-700: var(--color-orbit-700);
+  --color-scan-400: var(--color-scan-400);
+  --color-caution-400: var(--color-caution-400);
+  --color-block-400: var(--color-block-400);
+  --color-success-400: var(--color-success-400);
+  --color-focus-ring: var(--color-focus-ring);
+  --color-border-quiet: var(--border-quiet);
+  --color-border-active: var(--border-active);
+  --shadow-rim-panel: var(--rim-panel);
+  --shadow-rim-active: var(--rim-active);
+  --radius-control: var(--radius-control);
+  --radius-row: var(--radius-row);
+  --radius-panel: var(--radius-panel);
+  --radius-frame: var(--radius-frame);
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
-  min-width: 320px;
-  min-height: 180px;
   margin: 0;
+  background: var(--color-space-950);
+  font-family: var(--font-sans);
 }
-
-#app {
-  padding: 24px;
-}
-

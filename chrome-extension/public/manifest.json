@@ -3,9 +3,15 @@
   "name": "Astra Space",
   "version": "0.0.0",
   "description": "A privacy-first browser agent.",
+  "permissions": ["sidePanel"],
   "action": {
-    "default_popup": "index.html",
-    "default_title": "Astra Space"
+    "default_title": "Open Astra Space"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
   }
 }
-
