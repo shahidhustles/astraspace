@@ -35,6 +35,29 @@ export interface AttachConflictError {
   message: string;
 }
 
+export interface MissingTabError {
+  code: "missing_tab";
+  message: string;
+}
+
+export interface ChromeApiError {
+  code: "chrome_api_error";
+  message: string;
+}
+
+export interface LifecycleTimeoutError {
+  code: "lifecycle_timeout";
+  message: string;
+}
+
+export interface TabInfo {
+  tabId: number;
+  url: string;
+  title: string;
+  attached: boolean;
+  selected: boolean;
+}
+
 export type BrowserError =
   | InvalidUrlError
   | UnsupportedPageError
@@ -42,7 +65,10 @@ export type BrowserError =
   | AttachFailedError
   | ActiveTabUnavailableError
   | InaccessibleTabError
-  | AttachConflictError;
+  | AttachConflictError
+  | MissingTabError
+  | ChromeApiError
+  | LifecycleTimeoutError;
 
 export type UrlPolicyResult =
   | { ok: true; url: string }

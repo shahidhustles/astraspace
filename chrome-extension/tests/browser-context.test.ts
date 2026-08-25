@@ -19,20 +19,37 @@ function fakeBrowser(): FakeBrowser {
   return browser;
 }
 
+interface FakeEvents {
+  emitUpdated(tab: chrome.tabs.Tab): void;
+  emitActivated(tabId: number): void;
+  updatedListenerCount: () => number;
+  activatedListenerCount: () => number;
+}
+
 interface FakeDeps {
   context: BrowserContext;
   events: DiagnosticEvent[];
   connectTabCalls: () => number;
+  api: FakeEvents;
 }
 
 function setup(overrides: {
   tabs?: chrome.tabs.Tab[];
+  allTabs?: chrome.tabs.Tab[];
   connectTab?: PageDeps["connectTab"];
   connect?: PageDeps["connect"];
+  createTab?: (url: string) => Promise<chrome.tabs.Tab>;
+  updateTab?: (tabId: number) => Promise<chrome.tabs.Tab>;
+  timeoutMs?: number;
 } = {}): FakeDeps {
   let connectTabCalls = 0;
   const browser = fakeBrowser();
   const events: DiagnosticEvent[] = [];
+  const updatedListeners = new Set<
+    (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void
+  >();
+  const activatedListeners = new Set<(info: chrome.tabs.OnActivatedInfo) => void>();
+
   const pageDeps: PageDeps = {
     connect: async () => browser,
     connectTab: async () => {
@@ -41,12 +58,41 @@ function setup(overrides: {
     },
     ...overrides,
   };
+
   const context = new BrowserContext({
     queryActiveTab: async () => overrides.tabs ?? [],
+    queryTabs: async () => overrides.allTabs ?? [],
+    createTab: overrides.createTab ?? (async (url) => ({ id: 42, url }) as chrome.tabs.Tab),
+    updateTab: overrides.updateTab ?? (async (tabId) => ({ id: tabId, url: "https://example.com" }) as chrome.tabs.Tab),
+    onUpdated: (listener) => {
+      updatedListeners.add(listener);
+      return () => updatedListeners.delete(listener);
+    },
+    onActivated: (listener) => {
+      activatedListeners.add(listener);
+      return () => activatedListeners.delete(listener);
+    },
     diagnostics: (event) => events.push(event),
     pageDeps,
+    timeoutMs: overrides.timeoutMs ?? 50,
   });
-  return { context, events, connectTabCalls: () => connectTabCalls };
+
+  const api: FakeEvents = {
+    emitUpdated: (tab) => {
+      for (const listener of updatedListeners) {
+        listener(tab.id ?? 0, {}, tab);
+      }
+    },
+    emitActivated: (tabId) => {
+      for (const listener of activatedListeners) {
+        listener({ tabId, windowId: 1 });
+      }
+    },
+    updatedListenerCount: () => updatedListeners.size,
+    activatedListenerCount: () => activatedListeners.size,
+  };
+
+  return { context, events, connectTabCalls: () => connectTabCalls, api };
 }
 
 function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] {
@@ -220,5 +266,232 @@ describe("BrowserContext", () => {
 
     expect(JSON.stringify(events)).not.toContain("user:secret");
     expect(JSON.stringify(events)).not.toContain("example.com");
+  });
+
+  test("listTabs reports controllable tabs and selected state without attaching", async () => {
+    const { context, connectTabCalls } = setup({
+      tabs: activeTab(),
+      allTabs: [
+        { id: 7, url: "https://example.com", title: "One" } as chrome.tabs.Tab,
+        { id: 8, url: "https://other.com", title: "Two" } as chrome.tabs.Tab,
+        { id: 9, url: "chrome://newtab", title: "New Tab" } as chrome.tabs.Tab,
+      ],
+    });
+    await context.useActiveTab();
+
+    const result = await context.listTabs();
+
+    expect(result).toEqual({
+      ok: true,
+      tabs: [
+        { tabId: 7, url: "https://example.com", title: "One", attached: true, selected: true },
+        { tabId: 8, url: "https://other.com", title: "Two", attached: false, selected: false },
+      ],
+    });
+    expect(connectTabCalls()).toBe(1);
+  });
+
+  test("openTab creates a tab, waits for its URL, and attaches it", async () => {
+    const { context, api } = setup({});
+
+    const pending = context.openTab("https://example.com/start");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://example.com/start" });
+
+    expect(await pending).toEqual({ ok: true, tabId: 42 });
+    expect(context.selectedTabId).toBe(42);
+    expect(context.tabCount).toBe(1);
+  });
+
+  test("openTab rejects a blocked URL without creating a tab", async () => {
+    let createCalls = 0;
+    const { context } = setup({
+      createTab: async (url) => {
+        createCalls += 1;
+        return { id: 42, url } as chrome.tabs.Tab;
+      },
+    });
+
+    const result = await context.openTab("chrome://newtab");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
+    expect(createCalls).toBe(0);
+  });
+
+  test("openTab times out when the tab never reaches a controllable URL and keeps the previous selection", async () => {
+    const { context, api } = setup({ tabs: activeTab(), timeoutMs: 30 });
+    await context.useActiveTab();
+
+    const result = await context.openTab("https://example.com/slow");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "lifecycle_timeout", message: "Tab did not reach a controllable URL" },
+    });
+    expect(context.selectedTabId).toBe(7);
+    expect(api.updatedListenerCount()).toBe(0);
+  });
+
+  test("openTab returns chrome_api_error when tab creation fails", async () => {
+    const { context } = setup({
+      createTab: async () => {
+        throw new Error("boom");
+      },
+    });
+
+    const result = await context.openTab("https://example.com");
+
+    expect(result).toEqual({ ok: false, error: { code: "chrome_api_error", message: "Could not create tab" } });
+    expect(context.selectedTabId).toBeNull();
+  });
+
+  test("switchTab reuses the connection of a known attached tab", async () => {
+    const { context, api, connectTabCalls, events } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+    events.length = 0;
+
+    const pending = context.switchTab(7);
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitActivated(7);
+
+    expect(await pending).toEqual({ ok: true, tabId: 7 });
+    expect(connectTabCalls()).toBe(1);
+    expect(events).toEqual([{ type: "attach_reused", tabId: 7 }]);
+  });
+
+  test("switchTab attaches a registered tab whose earlier attach failed", async () => {
+    let fail = true;
+    const { context, api } = setup({
+      connectTab: async () => {
+        if (fail) {
+          throw new Error("tab not debuggable");
+        }
+        return {} as never;
+      },
+    });
+
+    const opened = context.openTab("https://example.com/start");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://example.com/start" });
+    expect((await opened).ok).toBe(false);
+
+    fail = false;
+    const switched = context.switchTab(42);
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitActivated(42);
+
+    expect(await switched).toEqual({ ok: true, tabId: 42 });
+    expect(context.selectedTabId).toBe(42);
+    expect(context.tabCount).toBe(1);
+  });
+
+  test("openTab creates two independent connections for two tabs", async () => {
+    let nextId = 10;
+    const { context, api, connectTabCalls } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+
+    expect(await first).toEqual({ ok: true, tabId: 10 });
+    expect(await second).toEqual({ ok: true, tabId: 11 });
+    expect(context.tabCount).toBe(2);
+    expect(connectTabCalls()).toBe(2);
+    expect(context.selectedTabId).toBe(11);
+  });
+
+  test("switching between two opened tabs changes selection and reuses both connections", async () => {
+    let nextId = 10;
+    const { context, api, connectTabCalls } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    const pending = context.switchTab(10);
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitActivated(10);
+
+    expect(await pending).toEqual({ ok: true, tabId: 10 });
+    expect(context.selectedTabId).toBe(10);
+    expect(connectTabCalls()).toBe(2);
+    expect(context.tabCount).toBe(2);
+  });
+
+  test("switchTab returns missing_tab for an unknown tab and leaves no listener", async () => {
+    const { context, api } = setup({
+      tabs: activeTab(),
+      updateTab: async () => {
+        throw new Error("No tab with id: 55");
+      },
+    });
+    await context.useActiveTab();
+
+    const result = await context.switchTab(55);
+
+    expect(result).toEqual({ ok: false, error: { code: "missing_tab", message: "No such tab" } });
+    expect(context.selectedTabId).toBe(7);
+    expect(api.activatedListenerCount()).toBe(0);
+  });
+
+  test("switchTab attaches a tab that is not yet registered", async () => {
+    const { context, api } = setup({
+      updateTab: async (tabId) => ({ id: tabId, url: "https://example.org" }) as chrome.tabs.Tab,
+    });
+
+    const pending = context.switchTab(33);
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitActivated(33);
+
+    expect(await pending).toEqual({ ok: true, tabId: 33 });
+    expect(context.selectedTabId).toBe(33);
+    expect(context.tabCount).toBe(1);
+  });
+
+  test("switchTab times out when activation never fires and keeps the previous selection", async () => {
+    const { context, api } = setup({ tabs: activeTab(), timeoutMs: 30 });
+    await context.useActiveTab();
+
+    const result = await context.switchTab(7);
+
+    expect(result).toEqual({ ok: false, error: { code: "lifecycle_timeout", message: "Tab did not activate" } });
+    expect(context.selectedTabId).toBe(7);
+    expect(api.activatedListenerCount()).toBe(0);
+  });
+
+  test("switchTab rejects an unsupported tab URL", async () => {
+    const { context, api } = setup({
+      updateTab: async (tabId) => ({ id: tabId, url: "chrome://newtab" }) as chrome.tabs.Tab,
+    });
+
+    const pending = context.switchTab(33);
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitActivated(33);
+
+    expect(await pending).toEqual({
+      ok: false,
+      error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
   });
 });
