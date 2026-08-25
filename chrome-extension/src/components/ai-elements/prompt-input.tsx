@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { CornerDownLeftIcon, LoaderCircleIcon } from "lucide-react";
+import { CornerDownLeftIcon } from "lucide-react";
 import type { ComponentProps, FormEvent, FormEventHandler, KeyboardEventHandler } from "react";
 import { useCallback, useState } from "react";
 
@@ -81,7 +81,7 @@ export function PromptInputSubmit({
   ...props
 }: PromptInputSubmitProps) {
   const isBusy = status === "submitted" || status === "streaming";
-  const label = isBusy ? "Waiting for Eve" : "Send message";
+  const label = isBusy ? "Replace the current reply" : "Send message";
 
   return (
     <button
@@ -94,11 +94,7 @@ export function PromptInputSubmit({
       type="submit"
       {...props}
     >
-      {isBusy ? (
-        <LoaderCircleIcon aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />
-      ) : (
-        <CornerDownLeftIcon aria-hidden className="size-4" />
-      )}
+      <CornerDownLeftIcon aria-hidden className="size-4" />
     </button>
   );
 }

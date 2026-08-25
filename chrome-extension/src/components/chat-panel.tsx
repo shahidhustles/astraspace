@@ -10,10 +10,12 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
+import { Button } from "@/components/ui/button";
 import { ChatMessage } from "@/components/chat-message";
 import { EVE_HOST } from "@/lib/eve-config";
 import { useEveAgent } from "eve/react";
-import { useState } from "react";
+import { SquareIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
 function Mark() {
   return (
@@ -30,23 +32,70 @@ export function ChatPanel() {
   const agent = useEveAgent({ host: EVE_HOST });
   const [input, setInput] = useState("");
   const [sendFailed, setSendFailed] = useState(false);
+  const [steering, setSteering] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const hasError = sendFailed || agent.status === "error";
 
+  useEffect(() => {
+    if (!steering) return;
+    if (agent.status === "ready" || agent.status === "error") {
+      setSteering(false);
+      return;
+    }
+    const lastEvent = agent.events[agent.events.length - 1];
+    if (lastEvent?.type === "message.received") setSteering(false);
+  }, [agent.events, agent.status, steering]);
+
   async function handleSubmit(message: PromptInputMessage) {
     const text = message.text.trim();
-    if (text.length === 0 || isBusy) return;
+    if (text.length === 0) return;
 
     setSendFailed(false);
+    setStopped(false);
+    setSteering(isBusy);
     setInput("");
 
     try {
-      await agent.send(text);
+      await agent.send(text, isBusy ? { turnPolicy: "steer" } : undefined);
     } catch {
       setSendFailed(true);
+      setSteering(false);
       setInput((current) => (current.length === 0 ? text : current));
     }
   }
+
+  async function handleStop() {
+    setStopping(true);
+    try {
+      const result = await agent.cancel();
+      if (result.status === "accepted") setStopped(true);
+    } catch {
+      setStopped(false);
+    } finally {
+      setStopping(false);
+    }
+  }
+
+  const stateLabel = hasError
+    ? "Unavailable"
+    : steering
+      ? "Replacing reply"
+      : stopped
+        ? "Stopped"
+        : agent.status === "submitted"
+          ? "Submitted"
+          : agent.status === "streaming"
+            ? "Replying"
+            : "Ready";
+  const stateDot = hasError
+    ? "bg-block-400"
+    : stopped
+      ? "bg-caution-400"
+      : isBusy || steering
+        ? "bg-scan-400 status-dot-active"
+        : "bg-orbit-400";
 
   return (
     <div className="flex h-full min-w-[280px] flex-col bg-space-950 text-ink-50">
@@ -62,17 +111,8 @@ export function ChatPanel() {
           aria-live="polite"
           className="flex items-center gap-1.5 rounded-full border border-border-quiet bg-space-850 px-2.5 py-1"
         >
-          <span
-            aria-hidden
-            className={
-              hasError
-                ? "size-1.5 rounded-full bg-block-400"
-                : "size-1.5 rounded-full bg-orbit-400"
-            }
-          />
-          <span className="text-[11px] font-medium leading-[1.3] text-ink-200">
-            {hasError ? "Unavailable" : isBusy ? "Replying" : "Ready"}
-          </span>
+          <span aria-hidden className={`size-1.5 rounded-full ${stateDot}`} />
+          <span className="text-[11px] font-medium leading-[1.3] text-ink-200">{stateLabel}</span>
         </span>
       </header>
 
@@ -115,10 +155,21 @@ export function ChatPanel() {
             }}
             value={input}
           />
-          <PromptInputSubmit
-            disabled={input.trim().length === 0 || isBusy}
-            status={agent.status}
-          />
+          {isBusy ? (
+            <Button
+              aria-label="Stop the reply"
+              className="size-10 text-block-400 hover:bg-block-400/10 hover:text-block-400"
+              disabled={stopping}
+              onClick={() => void handleStop()}
+              size="icon"
+              title="Stop the reply"
+              type="button"
+              variant="ghost"
+            >
+              <SquareIcon aria-hidden className="size-4 fill-current" />
+            </Button>
+          ) : null}
+          <PromptInputSubmit disabled={input.trim().length === 0} status={agent.status} />
         </PromptInput>
         <p className="mt-2 px-1 text-[11px] leading-[1.35] text-ink-600">
           Enter to send. Shift+Enter for a new line.
