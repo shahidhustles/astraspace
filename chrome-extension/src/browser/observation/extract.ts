@@ -5,6 +5,7 @@ import type {
   RectBounds,
   ViewportMeasurements,
 } from "./types";
+import { computeAccessibleName, computeRole } from "./accessibility";
 
 const IGNORED_TAGS = new Set([
   "script",
@@ -28,7 +29,7 @@ const INTERACTIVE_TAGS = new Set([
   "option",
 ]);
 
-const INTERACTIVE_ROLES = new Set([
+export const INTERACTIVE_ROLES = new Set([
   "button",
   "checkbox",
   "combobox",
@@ -90,6 +91,7 @@ export function extractPageContent(win: Window): ExtractedPageContent {
       kind: "element",
       tag: "document",
       role: null,
+      name: null,
       attrs: {},
       interactive: false,
       disabled: false,
@@ -164,7 +166,8 @@ function visitElement(
   const node: ExtractedElement = {
     kind: "element",
     tag,
-    role: el.getAttribute("role"),
+    role: computeRole(el),
+    name: interactive ? computeAccessibleName(win, el) : null,
     attrs: collectAttrs(el, tag),
     interactive,
     disabled,

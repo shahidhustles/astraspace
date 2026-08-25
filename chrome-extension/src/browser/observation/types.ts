@@ -34,6 +34,7 @@ export interface ExtractedElement {
   kind: "element";
   tag: string;
   role: string | null;
+  name: string | null;
   attrs: Record<string, string>;
   interactive: boolean;
   disabled: boolean;
@@ -54,6 +55,7 @@ export interface ObservedRef {
   ref: number;
   tag: string;
   role: string | null;
+  name: string | null;
   attrs: Record<string, string>;
   bounds: RectBounds | null;
 }

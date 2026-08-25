@@ -5,6 +5,7 @@ import type {
   ObservedRef,
   RenderedPageContent,
 } from "./types";
+import { INTERACTIVE_ROLES } from "./extract";
 
 const STRUCTURAL_TAGS = new Set([
   "address",
@@ -47,7 +48,7 @@ const STRUCTURAL_TAGS = new Set([
   "ul",
 ]);
 
-const TEXT_ATTRIBUTES = new Set(["aria-label", "placeholder", "title"]);
+const TEXT_ATTRIBUTES = new Set(["aria-label", "placeholder", "title", "alt"]);
 
 const ATTR_ORDER = new Map([
   ["type", 0],
@@ -112,7 +113,7 @@ function renderNode(
 
 function formatActionable(el: ExtractedElement): string {
   const attrs = renderAttrs(el);
-  const text = ownedText(el);
+  const text = el.name ?? ownedText(el);
   let line = `[${el.ref}]<${el.tag}`;
   if (attrs) {
     line += ` ${attrs}`;
@@ -135,7 +136,7 @@ function formatElement(el: ExtractedElement): string {
 }
 
 function renderAttrs(el: ExtractedElement): string {
-  const text = ownedText(el);
+  const text = el.name ?? ownedText(el);
   const parts: string[] = [];
   if (el.role && el.role !== el.tag) {
     parts.push(`role=${el.role}`);
@@ -181,7 +182,11 @@ function ownedText(el: ExtractedElement): string {
 }
 
 function isStructural(el: ExtractedElement): boolean {
-  return STRUCTURAL_TAGS.has(el.tag) || el.role !== null || el.disabled;
+  return (
+    STRUCTURAL_TAGS.has(el.tag) ||
+    el.disabled ||
+    (el.role !== null && !INTERACTIVE_ROLES.has(el.role))
+  );
 }
 
 function toObservedRef(el: ExtractedElement): ObservedRef {
@@ -189,6 +194,7 @@ function toObservedRef(el: ExtractedElement): ObservedRef {
     ref: el.ref as number,
     tag: el.tag,
     role: el.role,
+    name: el.name,
     attrs: el.attrs,
     bounds: el.bounds,
   };

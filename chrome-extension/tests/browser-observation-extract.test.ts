@@ -36,6 +36,7 @@ const FIXTURE = `<!doctype html>
       <input id="pass" type="password" name="pass" value="s3cret!" />
       <input id="agree" type="checkbox" name="agree" checked />
       <label id="agree-label" for="agree">Agree</label>
+      <label id="city-label" for="city">City</label>
       <select id="city" name="city">
         <option id="opt-berlin">Berlin</option>
         <option id="opt-paris" selected>Paris</option>
@@ -47,6 +48,10 @@ const FIXTURE = `<!doctype html>
     <div id="role-button" role="button" tabindex="0">Role button</div>
     <div id="tab-target" tabindex="0">Tab target</div>
     <div id="wrapper"><button id="wrapped-button">Wrapped action</button></div>
+    <input id="img-button" type="image" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Search" />
+    <div id="aria-check" role="checkbox" aria-checked="true" aria-label="Subscribe">Subscribe</div>
+    <button id="aria-labelledby" aria-labelledby="labelledby-target">Fallback text</button>
+    <span id="labelledby-target" hidden>Send report</span>
     <div id="inert-region" inert>Inert content <button id="inert-button">Inert button</button></div>
     <iframe id="frame" src="https://example.com"></iframe>
   </body>
@@ -64,6 +69,7 @@ const LAYOUT: Record<string, RectBounds> = {
   pass: { x: 90, y: 132, width: 160, height: 24 },
   agree: { x: 8, y: 168, width: 16, height: 16 },
   "agree-label": { x: 30, y: 168, width: 50, height: 16 },
+  "city-label": { x: 150, y: 200, width: 30, height: 16 },
   city: { x: 8, y: 200, width: 120, height: 24 },
   submit: { x: 8, y: 276, width: 90, height: 28 },
   "disabled-button": { x: 110, y: 306, width: 130, height: 28 },
@@ -72,6 +78,9 @@ const LAYOUT: Record<string, RectBounds> = {
   "tab-target": { x: 110, y: 348, width: 80, height: 20 },
   wrapper: { x: 8, y: 380, width: 200, height: 28 },
   "wrapped-button": { x: 8, y: 384, width: 120, height: 20 },
+  "img-button": { x: 8, y: 420, width: 100, height: 28 },
+  "aria-check": { x: 8, y: 460, width: 120, height: 20 },
+  "aria-labelledby": { x: 8, y: 492, width: 120, height: 20 },
 };
 
 function fixtureWindow(): Window {
@@ -133,6 +142,7 @@ describe("extractPageContent", () => {
       "Name",
       "Password",
       "Agree",
+      "City",
       "Berlin",
       "Paris",
       "Submit",
@@ -141,6 +151,8 @@ describe("extractPageContent", () => {
       "Role button",
       "Tab target",
       "Wrapped action",
+      "Subscribe",
+      "Fallback text",
     ]);
 
     const allText = collectText(content.root.children).join(" ");
@@ -163,7 +175,7 @@ describe("extractPageContent", () => {
 
     const content = extractPageContent(win);
 
-    expect(content.controls).toHaveLength(12);
+    expect(content.controls).toHaveLength(15);
     expect(content.controls.map((c) => c.tag)).toEqual([
       "input",
       "input",
@@ -177,49 +189,82 @@ describe("extractPageContent", () => {
       "div",
       "div",
       "button",
+      "input",
+      "div",
+      "button",
     ]);
     expect(content.controls.every((c) => c.interactive)).toBe(true);
     expect(content.controls.filter((c) => c.disabled).map((c) => c.tag)).toEqual(["button"]);
 
     const name = controlAtY(content, 96);
     expect(name.tag).toBe("input");
+    expect(name.role).toBe("textbox");
+    expect(name.name).toBe("Name");
     expect(name.attrs).toMatchObject({ type: "text", name: "name", value: "Alice" });
     expect(name.bounds).toEqual({ x: 60, y: 96, width: 160, height: 24 });
 
     const pass = controlAtY(content, 132);
     expect(pass.tag).toBe("input");
+    expect(pass.role).toBe("textbox");
+    expect(pass.name).toBe("Password");
     expect(pass.attrs).toMatchObject({ type: "password", name: "pass" });
     expect(pass.attrs.value).toBeUndefined();
 
     const agree = controlAtY(content, 168);
+    expect(agree.role).toBe("checkbox");
+    expect(agree.name).toBe("Agree");
     expect(agree.attrs.checked).toBe("true");
 
     const city = controlAtY(content, 200);
     expect(city.tag).toBe("select");
+    expect(city.role).toBe("combobox");
+    expect(city.name).toBe("City");
     expect(city.attrs.value).toBe("Paris");
 
     const options = content.controls.filter((c) => c.tag === "option");
     expect(options).toHaveLength(2);
+    expect(options[0].role).toBe("option");
+    expect(options[0].name).toBe("Berlin");
     expect(options[1].attrs.selected).toBe("true");
     expect(options.every((c) => c.bounds === null)).toBe(true);
 
     const submit = controlAtY(content, 276);
     expect(submit.tag).toBe("button");
+    expect(submit.role).toBe("button");
+    expect(submit.name).toBe("Submit");
     expect(submit.bounds).toEqual(LAYOUT.submit);
 
     const disabledButton = controlAtY(content, 306);
     expect(disabledButton.tag).toBe("button");
     expect(disabledButton.interactive).toBe(true);
     expect(disabledButton.disabled).toBe(true);
+    expect(disabledButton.name).toBe("Disabled action");
 
     const link = controlAtY(content, 320);
     expect(link.tag).toBe("a");
+    expect(link.role).toBe("link");
+    expect(link.name).toBe("Read more");
     expect(link.attrs.href).toBe("https://example.com");
 
     expect(content.controls.some((c) => c.bounds?.y === 348 && c.role === "button")).toBe(true);
     expect(content.controls.some((c) => c.bounds?.y === 348 && c.tag === "div" && c.role === null)).toBe(true);
     expect(content.controls.some((c) => c.bounds?.y === 380)).toBe(false);
     expect(content.controls.some((c) => c.bounds?.y === 384)).toBe(true);
+
+    const imageButton = controlAtY(content, 420);
+    expect(imageButton.tag).toBe("input");
+    expect(imageButton.role).toBe("button");
+    expect(imageButton.name).toBe("Search");
+    expect(imageButton.attrs.alt).toBe("Search");
+
+    const ariaCheck = controlAtY(content, 460);
+    expect(ariaCheck.role).toBe("checkbox");
+    expect(ariaCheck.name).toBe("Subscribe");
+    expect(ariaCheck.attrs["aria-checked"]).toBe("true");
+
+    const ariaLabelledby = controlAtY(content, 492);
+    expect(ariaLabelledby.tag).toBe("button");
+    expect(ariaLabelledby.name).toBe("Send report");
   });
 
   test("reports viewport bounds, document size, scroll ranges, and edge flags", () => {
