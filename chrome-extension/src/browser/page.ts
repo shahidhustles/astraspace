@@ -8,6 +8,7 @@ import {
   buildHighlightOverlayExpression,
   enrichPageContentWithAccessibility,
   observePageExpression,
+  readJpegDimensions,
   removeHighlightOverlayExpression,
   renderPageContent,
   type ExtractedPageContent,
@@ -188,6 +189,15 @@ export class BrowserPage {
         await page.evaluate(removeHighlightOverlayExpression(captureId));
       }
 
+      const finalUrl = page.url();
+      if (finalUrl !== url || !enforceUrlPolicy(finalUrl).ok) {
+        return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+      }
+      const screenshotDimensions = readJpegDimensions(data);
+      if (!screenshotDimensions) {
+        return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+      }
+
       return {
         ok: true,
         state: {
@@ -197,7 +207,7 @@ export class BrowserPage {
           scroll: viewport.scroll,
           dom: rendered.dom,
           refs,
-          screenshot: { mimeType: "image/jpeg", data, width: viewport.width, height: viewport.height },
+          screenshot: { mimeType: "image/jpeg", data, ...screenshotDimensions },
         },
       };
     } catch {

@@ -8,6 +8,7 @@ import type { BrowserState } from "../src/browser/types";
 
 const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
+const DEVICE_SCALE_FACTOR = 2;
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-observation.html");
 
@@ -65,7 +66,11 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
       executablePath: chromePath as string,
       headless: true,
       args: ["--no-sandbox"],
-      defaultViewport: { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT },
+      defaultViewport: {
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      },
     });
     [page] = await browser.pages();
     await page.goto(fixtureUrl, { waitUntil: "load" });
@@ -153,8 +158,8 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
       expect(state.dom).toContain("TOP VISIBLE TEXT");
       expect(state.dom).not.toContain("BOTTOM VISIBLE TEXT");
       expect(state.screenshot.data.startsWith("/9j/")).toBe(true);
-      expect(state.screenshot.width).toBe(VIEWPORT_WIDTH);
-      expect(state.screenshot.height).toBe(VIEWPORT_HEIGHT);
+      expect(state.screenshot.width).toBe(VIEWPORT_WIDTH * DEVICE_SCALE_FACTOR);
+      expect(state.screenshot.height).toBe(VIEWPORT_HEIGHT * DEVICE_SCALE_FACTOR);
 
       expect(labels).toEqual([state.refs.map((ref) => ref.ref)]);
       expect(await overlayCount()).toBe(0);
@@ -208,8 +213,8 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
       expect(top.result.state.screenshot.data).not.toBe(bottom.result.state.screenshot.data);
       expect(top.result.state.screenshot.mimeType).toBe("image/jpeg");
       expect(bottom.result.state.screenshot.mimeType).toBe("image/jpeg");
-      expect(top.result.state.screenshot.width).toBe(VIEWPORT_WIDTH);
-      expect(bottom.result.state.screenshot.height).toBe(VIEWPORT_HEIGHT);
+      expect(top.result.state.screenshot.width).toBe(VIEWPORT_WIDTH * DEVICE_SCALE_FACTOR);
+      expect(bottom.result.state.screenshot.height).toBe(VIEWPORT_HEIGHT * DEVICE_SCALE_FACTOR);
     },
     30_000,
   );

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { captureHighlightedViewport, clipToViewport } from "../src/browser/observation/capture";
+import {
+  captureHighlightedViewport,
+  clipToViewport,
+  readJpegDimensions,
+} from "../src/browser/observation/capture";
 import { extractPageContent } from "../src/browser/observation/extract";
 import { renderPageContent } from "../src/browser/observation/render";
 import type {
@@ -100,8 +104,8 @@ describe("captureHighlightedViewport", () => {
 
     expect(refs.map((r) => r.ref)).toEqual([1, 2, 3, 4]);
     expect(result.mimeType).toBe("image/jpeg");
-    expect(result.width).toBe(VIEWPORT_WIDTH);
-    expect(result.height).toBe(VIEWPORT_HEIGHT);
+    expect(result.width).toBe(4);
+    expect(result.height).toBe(4);
     expect(result.data).toBe(JPEG_BASE64);
     expect(seen).toEqual([1, 2, 3, 4]);
   });
@@ -233,6 +237,13 @@ describe("captureHighlightedViewport", () => {
     }
 
     expect(win.document.querySelector("[data-astra-observation]")).toBeNull();
+  });
+});
+
+describe("readJpegDimensions", () => {
+  test("reads encoded pixel dimensions and rejects invalid image data", () => {
+    expect(readJpegDimensions(JPEG_BASE64)).toEqual({ width: 4, height: 4 });
+    expect(readJpegDimensions("not a jpeg")).toBeNull();
   });
 });
 

@@ -35,13 +35,14 @@ import {
   clipToViewport,
   OVERLAY_CLASS,
   OVERLAY_CSS,
+  readJpegDimensions,
   removeHighlightOverlay,
   TARGET_CLASS,
 } from "./capture";
 import { renderPageContent } from "./render";
 import type { ObservedRef, ViewportMeasurements } from "./types";
 
-export { enrichPageContentWithAccessibility, renderPageContent };
+export { enrichPageContentWithAccessibility, readJpegDimensions, renderPageContent };
 export type { ExtractedPageContent, ObservedRef, ScrollState, ViewportCapture, ViewportMeasurements } from "./types";
 
 function setSource(name: string, values: Iterable<string>): string {

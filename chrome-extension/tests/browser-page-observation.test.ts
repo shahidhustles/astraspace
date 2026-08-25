@@ -204,8 +204,8 @@ describe("BrowserPage.observe", () => {
     expect(state.screenshot).toEqual({
       mimeType: "image/jpeg",
       data: JPEG_BASE64,
-      width: VIEWPORT_WIDTH,
-      height: VIEWPORT_HEIGHT,
+      width: 4,
+      height: 4,
     });
     expect(page.screenshotCalls).toBe(1);
     expect(page.lastScreenshotArgs).toEqual({
@@ -307,6 +307,31 @@ describe("BrowserPage.observe", () => {
     );
     expect(overlayNodes(win.document)).toHaveLength(0);
     expect(win.document.querySelector("[data-astra-observation] style")).toBeNull();
+  });
+
+  test("rejects an observation when the page navigates during capture", async () => {
+    const win = fixtureWindow();
+    const { deps, page } = fakeDeps(win);
+    let releaseScreenshot: (() => void) | null = null;
+    page.screenshotGate = new Promise<void>((resolve) => {
+      releaseScreenshot = resolve;
+    });
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const observation = wrapper.observe();
+    while (page.screenshotCalls === 0) {
+      await Promise.resolve();
+    }
+    page.currentUrl = "https://fixture.test/next";
+    releaseScreenshot?.();
+    const result = await observation;
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(overlayNodes(win.document)).toHaveLength(0);
   });
 
   test("serializes overlapping observations on one page", async () => {
