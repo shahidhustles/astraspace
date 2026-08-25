@@ -26,6 +26,49 @@ export function calculateUsedTokens(usage: EveStepUsage | null): number | undefi
   return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
 }
 
+export function hasFirstAssistantToken(
+  events: readonly MessageStreamEvent[],
+  startIndex: number,
+): boolean {
+  let submittedTurnId: string | null = null;
+
+  for (let index = startIndex; index < events.length; index += 1) {
+    const event = events[index];
+    if (!event) continue;
+
+    if (submittedTurnId === null) {
+      if (event.type === "message.received") submittedTurnId = event.data.turnId;
+      continue;
+    }
+
+    if (event.type === "message.appended") {
+      if (event.data.turnId === submittedTurnId && event.data.messageDelta.length > 0) {
+        return true;
+      }
+      continue;
+    }
+
+    if (event.type === "message.completed") {
+      if (event.data.turnId === submittedTurnId && (event.data.message?.length ?? 0) > 0) {
+        return true;
+      }
+      continue;
+    }
+
+    if (
+      (event.type === "reasoning.appended" || event.type === "reasoning.completed") &&
+      event.data.turnId === submittedTurnId &&
+      (event.type === "reasoning.appended"
+        ? event.data.reasoningDelta.length > 0
+        : event.data.reasoning.length > 0)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function latestModelCall(events: readonly MessageStreamEvent[]): EveModelCall {
   let modelId: string | null = null;
   let usage: EveStepUsage | null = null;

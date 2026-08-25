@@ -6,14 +6,19 @@ import {
 } from "@/components/ai-elements/conversation";
 import {
   PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
   type PromptInputMessage,
   PromptInputSubmit,
   PromptInputTextarea,
+  PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
+import { Loader } from "@/components/ai-elements/loader";
 import { Button } from "@/components/ui/button";
 import { ChatMessage } from "@/components/chat-message";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
+import { hasFirstAssistantToken } from "@/lib/eve-runtime-metadata";
 import { DEFAULT_MODEL_ID, type ModelId } from "@/lib/model-catalog";
 import { useEveAgent } from "eve/react";
 import { SquareIcon } from "lucide-react";
@@ -37,9 +42,13 @@ export function ChatPanel() {
   const [sendFailed, setSendFailed] = useState(false);
   const [steering, setSteering] = useState(false);
   const [stopping, setStopping] = useState(false);
-  const [stopped, setStopped] = useState(false);
+  const [replyEventStartIndex, setReplyEventStartIndex] = useState<number | null>(null);
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
   const hasError = sendFailed || agent.status === "error";
+  const isAwaitingAssistant =
+    isBusy &&
+    replyEventStartIndex !== null &&
+    !hasFirstAssistantToken(agent.events, replyEventStartIndex);
 
   useEffect(() => {
     if (!steering) return;
@@ -56,8 +65,8 @@ export function ChatPanel() {
     if (text.length === 0) return;
 
     setSendFailed(false);
-    setStopped(false);
     setSteering(isBusy);
+    setReplyEventStartIndex(agent.events.length);
     setInput("");
 
     try {
@@ -75,69 +84,40 @@ export function ChatPanel() {
   async function handleStop() {
     setStopping(true);
     try {
-      const result = await agent.cancel();
-      if (result.status === "accepted") setStopped(true);
+      await agent.cancel();
     } catch {
-      setStopped(false);
+      return;
     } finally {
       setStopping(false);
     }
   }
 
-  const stateLabel = hasError
-    ? "Unavailable"
-    : steering
-      ? "Replacing reply"
-      : stopped
-        ? "Stopped"
-        : agent.status === "submitted"
-          ? "Submitted"
-          : agent.status === "streaming"
-            ? "Replying"
-            : "Ready";
-  const stateDot = hasError
-    ? "bg-block-400"
-    : stopped
-      ? "bg-caution-400"
-      : isBusy || steering
-        ? "bg-scan-400 status-dot-active"
-        : "bg-orbit-400";
-
   return (
     <div className="flex h-full min-w-[280px] flex-col bg-space-950 text-ink-50">
-      <header className="flex items-center justify-between gap-3 border-b border-border-quiet bg-space-900 px-4 py-3 shadow-rim-panel">
+      <header className="flex items-center border-b border-border-quiet bg-space-900 px-4 py-3 shadow-rim-panel">
         <div className="flex items-center gap-2.5">
           <Mark />
-          <div>
-            <p className="text-[15px] font-medium leading-[1.35]">Astra Space</p>
-            <p className="text-[11px] leading-[1.35] text-ink-400">Local Eve session</p>
-          </div>
+          <p className="text-[15px] font-medium leading-[1.35]">Astra Space</p>
         </div>
-        <span
-          aria-live="polite"
-          className="flex items-center gap-1.5 rounded-full border border-border-quiet bg-space-850 px-2.5 py-1"
-        >
-          <span aria-hidden className={`size-1.5 rounded-full ${stateDot}`} />
-          <span className="text-[11px] font-medium leading-[1.3] text-ink-200">{stateLabel}</span>
-        </span>
       </header>
-
-      <div className="flex items-center justify-end gap-2 border-b border-border-quiet bg-space-900 px-4 py-2">
-        <RuntimeControls events={agent.events} modelId={modelId} onModelChange={setModelId} />
-      </div>
 
       <Conversation aria-label="Conversation with Eve">
         <ConversationContent>
           {agent.data.messages.length === 0 ? (
             <ConversationEmptyState
-              description="Ask a question and watch Eve answer as the text arrives."
-              title="Nothing sent yet"
+              description="Ask Eve a question. Replies stream in as they arrive."
+              title="Start a conversation"
             />
           ) : (
             agent.data.messages.map((message) => (
               <ChatMessage key={message.id} message={message} />
             ))
           )}
+          {isAwaitingAssistant ? (
+            <div aria-live="polite" className="flex min-h-8 items-center px-1" role="status">
+              <Loader className="text-orbit-400" size="sm" variant="bars" />
+            </div>
+          ) : null}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>
@@ -152,34 +132,47 @@ export function ChatPanel() {
               Eve is unavailable
             </p>
             <p className="mt-1 text-[12px] leading-[1.45] text-ink-400">
-              Start the local agent at 127.0.0.1:2000, then send the message again.
+              Check that Eve is running, then send the message again.
             </p>
           </div>
         ) : null}
 
         <PromptInput onSubmit={handleSubmit}>
-          <PromptInputTextarea
-            onChange={(event) => {
-              setInput(event.currentTarget.value);
-              if (hasError) setSendFailed(false);
-            }}
-            value={input}
-          />
-          {isBusy ? (
-            <Button
-              aria-label="Stop the reply"
-              className="size-10 text-block-400 hover:bg-block-400/10 hover:text-block-400"
-              disabled={stopping}
-              onClick={() => void handleStop()}
-              size="icon"
-              title="Stop the reply"
-              type="button"
-              variant="ghost"
-            >
-              <SquareIcon aria-hidden className="size-4 fill-current" />
-            </Button>
-          ) : null}
-          <PromptInputSubmit disabled={input.trim().length === 0} status={agent.status} />
+          <PromptInputBody>
+            <PromptInputTextarea
+              onChange={(event) => {
+                setInput(event.currentTarget.value);
+                if (hasError) setSendFailed(false);
+              }}
+              value={input}
+            />
+          </PromptInputBody>
+          <PromptInputFooter>
+            <PromptInputTools>
+              <RuntimeControls
+                events={agent.events}
+                modelId={modelId}
+                onModelChange={setModelId}
+              />
+            </PromptInputTools>
+            <div className="flex items-center gap-1">
+              {isBusy ? (
+                <Button
+                  aria-label="Stop the reply"
+                  className="size-10 text-block-400 hover:bg-block-400/10 hover:text-block-400"
+                  disabled={stopping}
+                  onClick={() => void handleStop()}
+                  size="icon"
+                  title="Stop the reply"
+                  type="button"
+                  variant="ghost"
+                >
+                  <SquareIcon aria-hidden className="size-4 fill-current" />
+                </Button>
+              ) : null}
+              <PromptInputSubmit disabled={input.trim().length === 0} status={agent.status} />
+            </div>
+          </PromptInputFooter>
         </PromptInput>
         <p className="mt-2 px-1 text-[11px] leading-[1.35] text-ink-600">
           Enter to send. Shift+Enter for a new line.

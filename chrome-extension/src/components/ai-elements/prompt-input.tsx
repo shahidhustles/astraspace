@@ -29,13 +29,36 @@ export function PromptInput({ className, onSubmit, ...props }: PromptInputProps)
   return (
     <form
       className={cn(
-        "relative flex w-full items-end gap-2 rounded-panel border border-border-quiet bg-space-900 p-2 shadow-rim-panel focus-within:border-border-active focus-within:shadow-rim-active",
+        "relative flex w-full flex-col rounded-panel border border-border-quiet bg-space-900 p-2 shadow-rim-panel focus-within:border-border-active focus-within:shadow-rim-active",
         className,
       )}
       onSubmit={handleSubmit}
       {...props}
     />
   );
+}
+
+export type PromptInputBodyProps = ComponentProps<"div">;
+
+export function PromptInputBody({ className, ...props }: PromptInputBodyProps) {
+  return <div className={cn("contents", className)} {...props} />;
+}
+
+export type PromptInputFooterProps = ComponentProps<"div">;
+
+export function PromptInputFooter({ className, ...props }: PromptInputFooterProps) {
+  return (
+    <div
+      className={cn("flex min-h-10 items-center justify-between gap-1", className)}
+      {...props}
+    />
+  );
+}
+
+export type PromptInputToolsProps = ComponentProps<"div">;
+
+export function PromptInputTools({ className, ...props }: PromptInputToolsProps) {
+  return <div className={cn("flex min-w-0 items-center gap-1", className)} {...props} />;
 }
 
 export type PromptInputTextareaProps = ComponentProps<"textarea">;
@@ -64,7 +87,7 @@ export function PromptInputTextarea({ className, onKeyDown, ...props }: PromptIn
       onCompositionEnd={() => setIsComposing(false)}
       onCompositionStart={() => setIsComposing(true)}
       onKeyDown={handleKeyDown}
-      placeholder="Message the local agent"
+      placeholder="Message Eve"
       rows={1}
       {...props}
     />

@@ -1,15 +1,8 @@
 import { createOpenAI } from "@ai-sdk/openai";
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { AgentModelSelectionDefinition } from "eve";
 
 const ZEN_BASE_URL = "https://opencode.ai/zen/go/v1";
 const zenOpenAI = createOpenAI({
-  apiKey: process.env.OPENCODE_API_KEY,
-  baseURL: ZEN_BASE_URL,
-});
-
-const zenOpenAICompatible = createOpenAICompatible({
-  name: "zen",
   apiKey: process.env.OPENCODE_API_KEY,
   baseURL: ZEN_BASE_URL,
 });
@@ -26,14 +19,8 @@ export const models = {
       },
     },
   } satisfies AgentModelSelectionDefinition,
-  "ox-alpha-free": {
-    model: zenOpenAICompatible.chatModel("ox-alpha-free"),
-    modelContextWindowTokens: 1_000_000,
-    modelOptions: {
-      providerOptions: {
-        zen: { reasoningEffort: "max" },
-      },
-    },
+  "muse-spark-1.2-contributor": {
+    model: zenOpenAI.responses("muse-spark-1.2-contributor"),
   } satisfies AgentModelSelectionDefinition,
 } as const;
 

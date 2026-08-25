@@ -127,18 +127,16 @@ textarea {
   animation: reasoning-enter 180ms ease-out;
 }
 
-@keyframes status-pulse {
+@keyframes wave-bars {
   0%,
   100% {
-    opacity: 1;
+    transform: scaleY(1);
+    opacity: 0.5;
   }
   50% {
-    opacity: 0.35;
+    transform: scaleY(0.6);
+    opacity: 1;
   }
-}
-
-.status-dot-active {
-  animation: status-pulse 1.6s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

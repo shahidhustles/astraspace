@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ChatMessage } from "../src/components/chat-message";
+import { Loader } from "../src/components/ai-elements/loader";
 import {
   Reasoning,
   ReasoningContent,
@@ -36,5 +37,16 @@ describe("chat message rendering", () => {
     );
 
     expect(html).not.toContain("hidden-reasoning");
+  });
+});
+
+describe("reply loader", () => {
+  test("renders the Prompt Kit bars variant with an accessible status", () => {
+    const html = renderToStaticMarkup(
+      createElement(Loader, { size: "sm", variant: "bars" }),
+    );
+
+    expect(html.match(/wave-bars/g)).toHaveLength(3);
+    expect(html).toContain("Eve is responding");
   });
 });

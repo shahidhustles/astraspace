@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { BotIcon, CheckIcon, ChevronDownIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
@@ -82,7 +82,7 @@ export function ModelSelectorTrigger({ className, ...props }: ModelSelectorTrigg
       aria-haspopup="listbox"
       aria-label={`Model ${label}`}
       className={cn(
-        "flex max-w-44 items-center gap-1.5 rounded-control border border-border-quiet bg-space-850 px-2.5 py-1 text-[11px] font-medium leading-[1.3] text-ink-200 transition-colors hover:bg-space-800 hover:text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-950",
+        "flex max-w-44 items-center gap-1 rounded-control px-2 py-1.5 text-[11px] font-medium leading-[1.3] text-ink-400 transition-colors hover:bg-space-800 hover:text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-900",
         className,
       )}
       onClick={() => setOpen(!open)}
@@ -90,7 +90,6 @@ export function ModelSelectorTrigger({ className, ...props }: ModelSelectorTrigg
       type="button"
       {...props}
     >
-      <BotIcon aria-hidden className="size-3.5 shrink-0 text-ink-400" />
       <span className="truncate">{label}</span>
       <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-ink-600" />
     </button>
@@ -106,7 +105,7 @@ export function ModelSelectorContent({ className, ...props }: ModelSelectorConte
   return (
     <div
       className={cn(
-        "absolute right-0 top-full z-20 mt-2 w-56 rounded-panel border border-border-quiet bg-space-900 p-1.5 shadow-dialog",
+        "absolute bottom-full left-0 z-20 mb-2 w-56 rounded-panel border border-border-quiet bg-space-900 p-1.5 shadow-dialog",
         className,
       )}
       role="listbox"

@@ -1,7 +1,11 @@
 import { cn } from "@/lib/utils";
-import { GaugeIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { createContext, useContext, useMemo } from "react";
+
+const ICON_RADIUS = 10;
+const ICON_VIEWBOX = 24;
+const ICON_CENTER = 12;
+const ICON_STROKE_WIDTH = 2;
 
 export interface ContextUsage {
   readonly cacheReadTokens?: number;
@@ -61,30 +65,67 @@ export function Context({
 
 export type ContextTriggerProps = ComponentProps<"button">;
 
+function ContextIcon() {
+  const { maxTokens, usedTokens } = useContextValue();
+  const circumference = 2 * Math.PI * ICON_RADIUS;
+  const measured = typeof usedTokens === "number" && typeof maxTokens === "number";
+  const usedPercent = measured ? Math.min(1, usedTokens / maxTokens) : 0;
+  const dashOffset = circumference * (1 - usedPercent);
+
+  return (
+    <svg
+      aria-hidden
+      height="20"
+      style={{ color: "currentcolor" }}
+      viewBox={`0 0 ${ICON_VIEWBOX} ${ICON_VIEWBOX}`}
+      width="20"
+    >
+      <circle
+        cx={ICON_CENTER}
+        cy={ICON_CENTER}
+        fill="none"
+        opacity="0.25"
+        r={ICON_RADIUS}
+        stroke="currentColor"
+        strokeWidth={ICON_STROKE_WIDTH}
+      />
+      <circle
+        cx={ICON_CENTER}
+        cy={ICON_CENTER}
+        fill="none"
+        opacity="0.7"
+        r={ICON_RADIUS}
+        stroke="currentColor"
+        strokeDasharray={`${circumference} ${circumference}`}
+        strokeDashoffset={dashOffset}
+        strokeLinecap="round"
+        strokeWidth={ICON_STROKE_WIDTH}
+        style={{ transform: "rotate(-90deg)", transformOrigin: "center" }}
+      />
+    </svg>
+  );
+}
+
 export function ContextTrigger({ className, ...props }: ContextTriggerProps) {
   const { maxTokens, usedTokens } = useContextValue();
   const used = typeof usedTokens === "number" ? usedTokens : null;
   const max = typeof maxTokens === "number" ? maxTokens : null;
   const measured = used !== null && max !== null;
-  const text = measured ? formatPercent(used / max) : "Not measured";
+  const text = measured ? formatPercent(used / max) : null;
 
   return (
     <button
       aria-label={
-        measured ? `Context window usage ${text}` : "Context window usage not measured"
+        measured ? `Context window usage ${text}` : "Context window usage pending"
       }
       className={cn(
-        "flex items-center gap-1.5 rounded-control border border-border-quiet bg-space-850 px-2.5 py-1 text-[11px] font-medium leading-[1.3] text-ink-200 transition-colors hover:bg-space-800 hover:text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-950",
+        "grid size-8 place-items-center rounded-control text-ink-400 transition-colors hover:bg-space-800 hover:text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-900",
         className,
       )}
       type="button"
-      title={
-        measured ? `${formatTokens(used)} / ${formatTokens(max)} tokens` : "Not measured"
-      }
       {...props}
     >
-      <GaugeIcon aria-hidden className="size-3.5 text-ink-400" />
-      <span>{text}</span>
+      <ContextIcon />
     </button>
   );
 }
@@ -95,7 +136,7 @@ export function ContextContent({ className, ...props }: ContextContentProps) {
   return (
     <div
       className={cn(
-        "invisible absolute right-0 top-full z-20 mt-2 w-60 rounded-panel border border-border-quiet bg-space-900 p-3 opacity-0 shadow-dialog transition-opacity duration-150 group-hover/context:visible group-hover/context:opacity-100 group-focus-within/context:visible group-focus-within/context:opacity-100",
+        "invisible absolute bottom-full left-0 z-20 mb-2 w-60 rounded-panel border border-border-quiet bg-space-900 p-3 opacity-0 shadow-dialog transition-opacity duration-150 group-hover/context:visible group-hover/context:opacity-100 group-focus-within/context:visible group-focus-within/context:opacity-100",
         className,
       )}
       {...props}
@@ -114,9 +155,8 @@ export function ContextContentHeader({ className, ...props }: ContextContentHead
   if (!measured) {
     return (
       <div className={cn("p-1", className)} {...props}>
-        <p className="text-[13px] font-medium leading-[1.4] text-ink-50">Not measured</p>
-        <p className="mt-1 text-[11px] leading-[1.4] text-ink-400">
-          Usage or the context maximum is unavailable.
+        <p className="text-[12px] leading-[1.45] text-ink-400">
+          Token usage appears after the first reply.
         </p>
       </div>
     );

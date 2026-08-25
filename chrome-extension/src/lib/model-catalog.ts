@@ -6,10 +6,10 @@ export const MODEL_OPTIONS = [
     reasoningLabel: "Medium reasoning",
   },
   {
-    contextWindowTokens: 1_000_000,
-    id: "ox-alpha-free",
-    label: "Ox Alpha Free",
-    reasoningLabel: "Maximum reasoning",
+    contextWindowTokens: undefined,
+    id: "muse-spark-1.2-contributor",
+    label: "Muse Spark 1.2 Contributor",
+    reasoningLabel: "Provider default",
   },
 ] as const;
 

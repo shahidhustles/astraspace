@@ -38,7 +38,7 @@ export type ConversationEmptyStateProps = ComponentProps<"div"> & {
 export function ConversationEmptyState({
   className,
   title = "Start a conversation",
-  description = "Send a prompt to the local Eve agent.",
+  description = "Ask a question. Replies stream in as they arrive.",
   ...props
 }: ConversationEmptyStateProps) {
   return (
@@ -49,7 +49,6 @@ export function ConversationEmptyState({
       )}
       {...props}
     >
-      <span aria-hidden className="mb-2 h-px w-12 bg-gradient-to-r from-orbit-400 to-scan-400" />
       <h1 className="text-[20px] font-medium leading-[1.25] text-ink-50">{title}</h1>
       <p className="max-w-[30ch] text-[13px] leading-[1.45] text-ink-400">{description}</p>
     </div>

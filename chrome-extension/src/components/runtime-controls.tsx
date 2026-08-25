@@ -39,7 +39,7 @@ export function RuntimeControls({ events, modelId, onModelChange }: RuntimeContr
   const usageModel = modelOptionFromRuntimeId(call.modelId) ?? selectedModel;
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-1">
       <ModelSelector
         label={selectedModel.label}
         model={modelId}
