@@ -61,9 +61,12 @@ export class BrowserPage {
       this.browser = browser;
       this.puppeteerPage = page;
       return { ok: true, tabId: this.tabId };
-    } catch {
+    } catch (error) {
       if (browser) {
         await browser.disconnect();
+      }
+      if (error instanceof Error && /already attached/i.test(error.message)) {
+        return { ok: false, error: { code: "attach_conflict", message: "Another debugger is attached to the tab" } };
       }
       return { ok: false, error: { code: "attach_failed", message: "Failed to attach to tab" } };
     }

@@ -1,4 +1,8 @@
-import "./browser/page";
+import { BrowserContext } from "./browser/context";
+
+export const browserContext = new BrowserContext({
+  diagnostics: (event) => console.log("browser", event),
+});
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
