@@ -24,6 +24,7 @@
   --border-active: rgba(168, 155, 255, 0.42);
   --rim-panel: inset 0 1px 0 rgba(255, 255, 255, 0.055);
   --rim-active: inset 0 0 24px rgba(168, 155, 255, 0.07);
+  --shadow-dialog: 0 24px 80px rgba(2, 1, 8, 0.62);
   --radius-control: 6px;
   --radius-row: 10px;
   --radius-panel: 16px;
@@ -52,6 +53,7 @@
   --color-border-active: var(--border-active);
   --shadow-rim-panel: var(--rim-panel);
   --shadow-rim-active: var(--rim-active);
+  --shadow-dialog: var(--shadow-dialog);
   --radius-control: var(--radius-control);
   --radius-row: var(--radius-row);
   --radius-panel: var(--radius-panel);

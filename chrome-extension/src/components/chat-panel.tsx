@@ -12,6 +12,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Button } from "@/components/ui/button";
 import { ChatMessage } from "@/components/chat-message";
+import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
 import { useEveAgent } from "eve/react";
 import { SquareIcon } from "lucide-react";
@@ -115,6 +116,10 @@ export function ChatPanel() {
           <span className="text-[11px] font-medium leading-[1.3] text-ink-200">{stateLabel}</span>
         </span>
       </header>
+
+      <div className="flex items-center justify-end gap-2 border-b border-border-quiet bg-space-900 px-4 py-2">
+        <RuntimeControls events={agent.events} />
+      </div>
 
       <Conversation aria-label="Conversation with Eve">
         <ConversationContent>
