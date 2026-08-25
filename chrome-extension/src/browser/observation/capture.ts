@@ -10,12 +10,13 @@ export interface CaptureOptions {
   viewport: ViewportMeasurements;
   captureScreenshot: () => Promise<string>;
   document: Document;
+  captureId?: string;
 }
 
 export const OVERLAY_CLASS = "astra-obs-overlay";
 export const TARGET_CLASS = "astra-obs-target";
 export const BADGE_CLASS = "astra-obs-badge";
-export const STYLE_ID = "astra-obs-style";
+export const CAPTURE_ATTRIBUTE = "data-astra-observation";
 
 export const OVERLAY_CSS = `
 .${OVERLAY_CLASS} {
@@ -61,13 +62,15 @@ export function buildHighlightOverlay(
   doc: Document,
   refs: ObservedRef[],
   viewport: ViewportMeasurements,
+  captureId = "default",
 ): HTMLElement {
   const style = doc.createElement("style");
-  style.id = STYLE_ID;
   style.textContent = OVERLAY_CSS;
 
   const overlay = doc.createElement("div");
   overlay.className = OVERLAY_CLASS;
+  overlay.setAttribute(CAPTURE_ATTRIBUTE, captureId);
+  overlay.appendChild(style);
   for (const ref of refs) {
     if (!ref.bounds) {
       continue;
@@ -79,27 +82,27 @@ export function buildHighlightOverlay(
     overlay.appendChild(buildLabel(doc, ref.ref, clipped));
   }
 
-  doc.documentElement.appendChild(style);
   doc.documentElement.appendChild(overlay);
   return overlay;
 }
 
-export function removeHighlightOverlay(doc: Document): void {
-  doc.getElementById(STYLE_ID)?.remove();
-  for (const node of doc.querySelectorAll(`.${OVERLAY_CLASS}, .${TARGET_CLASS}, .${BADGE_CLASS}`)) {
-    node.remove();
+export function removeHighlightOverlay(doc: Document, captureId = "default"): void {
+  for (const node of doc.querySelectorAll(`[${CAPTURE_ATTRIBUTE}]`)) {
+    if (node.getAttribute(CAPTURE_ATTRIBUTE) === captureId) {
+      node.remove();
+    }
   }
 }
 
 export async function captureHighlightedViewport(options: CaptureOptions): Promise<ViewportCapture> {
-  const { refs, viewport, captureScreenshot, document: doc } = options;
+  const { refs, viewport, captureScreenshot, document: doc, captureId = "default" } = options;
 
-  buildHighlightOverlay(doc, refs, viewport);
   try {
+    buildHighlightOverlay(doc, refs, viewport, captureId);
     const data = await captureScreenshot();
     return { data, mimeType: "image/jpeg", width: viewport.width, height: viewport.height };
   } finally {
-    removeHighlightOverlay(doc);
+    removeHighlightOverlay(doc, captureId);
   }
 }
 

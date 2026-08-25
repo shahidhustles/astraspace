@@ -38,6 +38,7 @@ export class BrowserPage {
   private readonly policy: UrlPolicyResult;
   private browser: Browser | null = null;
   private puppeteerPage: Page | null = null;
+  private observationQueue: Promise<void> = Promise.resolve();
 
   constructor(tabId: number, url: string, deps: PageDeps = defaultDeps) {
     this.tabId = tabId;
@@ -119,7 +120,16 @@ export class BrowserPage {
     return this.runNavigation((page) => page.reload(this.navOptions()));
   }
 
-  async observe(): Promise<ObserveResult> {
+  observe(): Promise<ObserveResult> {
+    const result = this.observationQueue.then(() => this.performObservation());
+    this.observationQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  private async performObservation(): Promise<ObserveResult> {
     if (!this.attached || !this.puppeteerPage) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
@@ -164,17 +174,18 @@ export class BrowserPage {
       const rendered = renderPageContent(enriched);
       const refs = rendered.refs;
       const viewport = enriched.viewport;
+      const captureId = crypto.randomUUID();
 
-      await page.evaluate(buildHighlightOverlayExpression(refs, viewport));
       let data: string;
       try {
+        await page.evaluate(buildHighlightOverlayExpression(refs, viewport, captureId));
         data = (await page.screenshot({
           type: "jpeg",
           quality: SCREENSHOT_QUALITY,
           encoding: "base64",
         })) as string;
       } finally {
-        await page.evaluate(removeHighlightOverlayExpression());
+        await page.evaluate(removeHighlightOverlayExpression(captureId));
       }
 
       return {

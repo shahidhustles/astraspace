@@ -118,7 +118,7 @@ describe("captureHighlightedViewport", () => {
     });
 
     expect(overlayNodes(win.document)).toHaveLength(0);
-    expect(win.document.getElementById("astra-obs-style")).toBeNull();
+    expect(win.document.querySelector("[data-astra-observation] style")).toBeNull();
   });
 
   test("removes the overlay and temporary style when the screenshot fails", async () => {
@@ -137,7 +137,7 @@ describe("captureHighlightedViewport", () => {
     ).rejects.toThrow("screenshot failed");
 
     expect(overlayNodes(win.document)).toHaveLength(0);
-    expect(win.document.getElementById("astra-obs-style")).toBeNull();
+    expect(win.document.querySelector("[data-astra-observation] style")).toBeNull();
   });
 
   test("clips label boxes to the viewport and leaves ref bounds unchanged", async () => {
@@ -184,6 +184,55 @@ describe("captureHighlightedViewport", () => {
       { ref: 1, left: 20, top: 0, width: 100, height: 10 },
       { ref: 2, left: 780, top: 20, width: 20, height: 20 },
     ]);
+  });
+
+  test("cleanup preserves page-owned nodes with Astra-like identifiers", async () => {
+    const win = fixtureWindow();
+    const { refs, viewport } = observeFixture(win);
+    const pageStyle = win.document.createElement("style");
+    pageStyle.id = "astra-obs-style";
+    pageStyle.textContent = ".page-owned { color: red }";
+    const pageNode = win.document.createElement("div");
+    pageNode.className = "astra-obs-overlay astra-obs-target astra-obs-badge";
+    pageNode.textContent = "Page owned";
+    win.document.body.append(pageStyle, pageNode);
+
+    await captureHighlightedViewport({
+      refs,
+      viewport,
+      captureId: "capture-1",
+      captureScreenshot: async () => JPEG_BASE64,
+      document: win.document,
+    });
+
+    expect(win.document.getElementById("astra-obs-style")).toBe(pageStyle);
+    expect(win.document.body.contains(pageNode)).toBe(true);
+    expect(win.document.querySelector("[data-astra-observation]")).toBeNull();
+  });
+
+  test("cleanup runs when overlay construction fails", async () => {
+    const win = fixtureWindow();
+    const { refs, viewport } = observeFixture(win);
+    const originalAppend = win.document.documentElement.appendChild.bind(win.document.documentElement);
+    win.document.documentElement.appendChild = (() => {
+      throw new Error("append failed");
+    }) as typeof win.document.documentElement.appendChild;
+
+    try {
+      await expect(
+        captureHighlightedViewport({
+          refs,
+          viewport,
+          captureId: "capture-2",
+          captureScreenshot: async () => JPEG_BASE64,
+          document: win.document,
+        }),
+      ).rejects.toThrow("append failed");
+    } finally {
+      win.document.documentElement.appendChild = originalAppend;
+    }
+
+    expect(win.document.querySelector("[data-astra-observation]")).toBeNull();
   });
 });
 

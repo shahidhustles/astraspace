@@ -31,11 +31,11 @@ import {
   BADGE_CLASS,
   buildHighlightOverlay,
   buildLabel,
+  CAPTURE_ATTRIBUTE,
   clipToViewport,
   OVERLAY_CLASS,
   OVERLAY_CSS,
   removeHighlightOverlay,
-  STYLE_ID,
   TARGET_CLASS,
 } from "./capture";
 import { renderPageContent } from "./render";
@@ -79,7 +79,7 @@ const OVERLAY_PREAMBLE = [
   `const OVERLAY_CLASS = ${JSON.stringify(OVERLAY_CLASS)};`,
   `const TARGET_CLASS = ${JSON.stringify(TARGET_CLASS)};`,
   `const BADGE_CLASS = ${JSON.stringify(BADGE_CLASS)};`,
-  `const STYLE_ID = ${JSON.stringify(STYLE_ID)};`,
+  `const CAPTURE_ATTRIBUTE = ${JSON.stringify(CAPTURE_ATTRIBUTE)};`,
   `const OVERLAY_CSS = ${JSON.stringify(OVERLAY_CSS)};`,
   clipToViewport.toString(),
   buildLabel.toString(),
@@ -92,14 +92,14 @@ ${EXTRACT_PREAMBLE}
 return extractPageContent(win);
 }`;
 
-export const BUILD_HIGHLIGHT_OVERLAY_SOURCE = `(doc, refs, viewport) => {
+export const BUILD_HIGHLIGHT_OVERLAY_SOURCE = `(doc, refs, viewport, captureId) => {
 ${OVERLAY_PREAMBLE}
-buildHighlightOverlay(doc, refs, viewport);
+buildHighlightOverlay(doc, refs, viewport, captureId);
 }`;
 
-export const REMOVE_HIGHLIGHT_OVERLAY_SOURCE = `(doc) => {
+export const REMOVE_HIGHLIGHT_OVERLAY_SOURCE = `(doc, captureId) => {
 ${OVERLAY_PREAMBLE}
-removeHighlightOverlay(doc);
+removeHighlightOverlay(doc, captureId);
 }`;
 
 export function observePageExpression(): string {
@@ -109,10 +109,11 @@ export function observePageExpression(): string {
 export function buildHighlightOverlayExpression(
   refs: ObservedRef[],
   viewport: ViewportMeasurements,
+  captureId: string,
 ): string {
-  return `(${BUILD_HIGHLIGHT_OVERLAY_SOURCE})(document, ${JSON.stringify(refs)}, ${JSON.stringify(viewport)})`;
+  return `(${BUILD_HIGHLIGHT_OVERLAY_SOURCE})(document, ${JSON.stringify(refs)}, ${JSON.stringify(viewport)}, ${JSON.stringify(captureId)})`;
 }
 
-export function removeHighlightOverlayExpression(): string {
-  return `(${REMOVE_HIGHLIGHT_OVERLAY_SOURCE})(document)`;
+export function removeHighlightOverlayExpression(captureId: string): string {
+  return `(${REMOVE_HIGHLIGHT_OVERLAY_SOURCE})(document, ${JSON.stringify(captureId)})`;
 }

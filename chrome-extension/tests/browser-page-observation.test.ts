@@ -62,6 +62,7 @@ interface FakePage extends Page {
   evaluateError: Error | null;
   screenshotCalls: number;
   screenshotError: Error | null;
+  screenshotGate: Promise<void> | null;
   lastScreenshotArgs: unknown;
   axSnapshots: Array<SerializableAXNode | null>;
 }
@@ -78,6 +79,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
     evaluateError: null,
     screenshotCalls: 0,
     screenshotError: null,
+    screenshotGate: null,
     lastScreenshotArgs: null,
     axSnapshots: [],
     url: () => page.currentUrl,
@@ -115,6 +117,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
     screenshot: async (options?: unknown) => {
       page.screenshotCalls += 1;
       page.lastScreenshotArgs = options;
+      await page.screenshotGate;
       if (page.screenshotError) {
         throw page.screenshotError;
       }
@@ -171,12 +174,12 @@ describe("page observation scripts", () => {
     ) => void;
     buildFn(win.document, rendered.refs, content.viewport);
     expect(win.document.querySelectorAll(".astra-obs-badge")).toHaveLength(4);
-    expect(win.document.getElementById("astra-obs-style")).not.toBeNull();
+    expect(win.document.querySelector("[data-astra-observation] style")).not.toBeNull();
 
     const removeFn = evaluateSource(REMOVE_HIGHLIGHT_OVERLAY_SOURCE) as (doc: Document) => void;
     removeFn(win.document);
     expect(overlayNodes(win.document)).toHaveLength(0);
-    expect(win.document.getElementById("astra-obs-style")).toBeNull();
+    expect(win.document.querySelector("[data-astra-observation] style")).toBeNull();
   });
 });
 
@@ -213,8 +216,10 @@ describe("BrowserPage.observe", () => {
 
     expect(page.evaluateCalls).toHaveLength(3);
     expect(page.evaluateCalls[0]).toContain("extractPageContent(win)");
-    expect(page.evaluateCalls[1]).toContain("buildHighlightOverlay(doc, refs, viewport)");
-    expect(page.evaluateCalls[2]).toContain("removeHighlightOverlay(doc)");
+    expect(page.evaluateCalls[1]).toContain("buildHighlightOverlay(doc, refs, viewport, captureId)");
+    expect(page.evaluateCalls[2]).toContain(
+      "removeHighlightOverlay(doc, captureId)",
+    );
     expect(overlayNodes(win.document)).toHaveLength(0);
   });
 
@@ -296,9 +301,38 @@ describe("BrowserPage.observe", () => {
       ok: false,
       error: { code: "observation_failed", message: "Page observation failed" },
     });
-    expect(page.evaluateCalls[1]).toContain("buildHighlightOverlay(doc, refs, viewport)");
-    expect(page.evaluateCalls[2]).toContain("removeHighlightOverlay(doc)");
+    expect(page.evaluateCalls[1]).toContain("buildHighlightOverlay(doc, refs, viewport, captureId)");
+    expect(page.evaluateCalls[2]).toContain(
+      "removeHighlightOverlay(doc, captureId)",
+    );
     expect(overlayNodes(win.document)).toHaveLength(0);
-    expect(win.document.getElementById("astra-obs-style")).toBeNull();
+    expect(win.document.querySelector("[data-astra-observation] style")).toBeNull();
+  });
+
+  test("serializes overlapping observations on one page", async () => {
+    const win = fixtureWindow();
+    const { deps, page } = fakeDeps(win);
+    let releaseScreenshot: (() => void) | null = null;
+    page.screenshotGate = new Promise<void>((resolve) => {
+      releaseScreenshot = resolve;
+    });
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const first = wrapper.observe();
+    while (page.screenshotCalls === 0) {
+      await Promise.resolve();
+    }
+    const second = wrapper.observe();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.screenshotCalls).toBe(1);
+    releaseScreenshot?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.ok).toBe(true);
+    expect(secondResult.ok).toBe(true);
+    expect(page.screenshotCalls).toBe(2);
+    expect(overlayNodes(win.document)).toHaveLength(0);
   });
 });

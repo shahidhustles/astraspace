@@ -129,7 +129,7 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
   }
 
   async function overlayStylePresent(): Promise<boolean> {
-    return page.evaluate(() => document.getElementById("astra-obs-style") !== null);
+    return page.evaluate(() => document.querySelector("[data-astra-observation] style") !== null);
   }
 
   test(
