@@ -39,6 +39,7 @@ export function ConversationEmptyState({
   className,
   title = "Start a conversation",
   description = "Ask a question. Replies stream in as they arrive.",
+  children,
   ...props
 }: ConversationEmptyStateProps) {
   return (
@@ -49,6 +50,7 @@ export function ConversationEmptyState({
       )}
       {...props}
     >
+      {children}
       <h1 className="text-[20px] font-medium leading-[1.25] text-ink-50">{title}</h1>
       <p className="max-w-[30ch] text-[13px] leading-[1.45] text-ink-400">{description}</p>
     </div>

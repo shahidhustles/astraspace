@@ -164,6 +164,12 @@ Settings use a single reading column with grouped sections. Model selection, loc
 
 ## Core components
 
+### Astra Blob mascot
+
+The Astra Blob is the official mascot. It uses the violet orbit palette and retains the Feral Blob's soft SVG form, never a generic AI orb or astronaut. Place it in spacious, low-stakes moments: the empty conversation before a first message, a short wait while Astra starts work, or a concise piece of friendly guidance. It may look toward the task composer and brighten while the person types.
+
+Keep the mascot decorative and supplementary. It does not carry status, instructions, privacy evidence, warnings, or error recovery. Hide it once conversation content needs the space. Its expression and motion must respect reduced-motion preferences.
+
 ### Primary button
 
 - Background: `--color-orbit-500`

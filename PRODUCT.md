@@ -99,6 +99,8 @@ Future product copy must distinguish implemented behavior from planned capabilit
 
 The product name is **Astra Space**.
 
+The official mascot is the Astra Blob, a violet Feral Blob used as a small, expressive companion at moments of invitation or waiting. It appears when a conversation has no messages and can react as a person starts typing. Use it sparingly when it helps make an empty, loading, or low-stakes guidance state feel more human. It must never stand in for an actual task, privacy, approval, or error state.
+
 The voice is capable, direct, and accountable. Lead with work completed, time saved, or a result delivered. Explain privacy with evidence when it matters. Do not make sanitization the headline of every screen or describe a general-purpose agent as a privacy utility.
 
 Use concrete language such as "Prepare the briefing every weekday at 8:00," "Research delegated to two subagents," or "3 private values removed." Avoid claims such as "Works everywhere," "Fully autonomous," or "Your data is completely safe."

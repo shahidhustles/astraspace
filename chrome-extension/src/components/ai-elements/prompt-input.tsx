@@ -78,7 +78,7 @@ export function PromptInputTextarea({ className, onKeyDown, ...props }: PromptIn
 
   return (
     <textarea
-      aria-label="Message Eve"
+      aria-label="Message Astra"
       className={cn(
         "field-sizing-content max-h-40 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[14px] leading-[1.5] text-ink-50 outline-none placeholder:text-ink-600",
         className,
@@ -87,7 +87,7 @@ export function PromptInputTextarea({ className, onKeyDown, ...props }: PromptIn
       onCompositionEnd={() => setIsComposing(false)}
       onCompositionStart={() => setIsComposing(true)}
       onKeyDown={handleKeyDown}
-      placeholder="Message Eve"
+      placeholder="Message Astra"
       rows={1}
       {...props}
     />

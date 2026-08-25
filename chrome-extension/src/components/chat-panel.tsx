@@ -15,6 +15,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
 import { Button } from "@/components/ui/button";
+import { AstraBlob } from "@/components/astra-blob";
 import { ChatMessage } from "@/components/chat-message";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
@@ -105,9 +106,11 @@ export function ChatPanel() {
         <ConversationContent>
           {agent.data.messages.length === 0 ? (
             <ConversationEmptyState
-              description="Ask Eve a question. Replies stream in as they arrive."
+              description="Tell Astra what you want to get done."
               title="Start a conversation"
-            />
+            >
+              <AstraBlob isComposing={input.trim().length > 0} />
+            </ConversationEmptyState>
           ) : (
             agent.data.messages.map((message) => (
               <ChatMessage key={message.id} message={message} />

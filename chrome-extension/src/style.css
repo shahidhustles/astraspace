@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "@fontsource/inter/400.css";
 @import "@fontsource/inter/500.css";
+@import "feral-blob/blob.css";
+
+@source "../node_modules/streamdown/dist/*.js";
+@source "../node_modules/@streamdown/code/dist/*.js";
 
 :root {
   color-scheme: dark;
@@ -29,6 +33,25 @@
   --radius-row: 10px;
   --radius-panel: 16px;
   --radius-frame: 20px;
+  --radius: 0.625rem;
+  --background: var(--color-space-950);
+  --foreground: var(--color-ink-50);
+  --card: var(--color-space-900);
+  --card-foreground: var(--color-ink-200);
+  --muted: var(--color-space-850);
+  --muted-foreground: var(--color-ink-400);
+  --border: var(--border-quiet);
+  --input: var(--border-quiet);
+  --primary: var(--color-orbit-400);
+  --primary-foreground: var(--color-space-950);
+  --sidebar: var(--color-space-900);
+  --sidebar-foreground: var(--color-ink-200);
+  --sidebar-primary: var(--color-orbit-400);
+  --sidebar-primary-foreground: var(--color-space-950);
+  --sidebar-accent: var(--color-space-850);
+  --sidebar-accent-foreground: var(--color-ink-200);
+  --sidebar-border: var(--border-quiet);
+  --sidebar-ring: var(--color-focus-ring);
 }
 
 @theme inline {
@@ -51,6 +74,24 @@
   --color-focus-ring: var(--color-focus-ring);
   --color-border-quiet: var(--border-quiet);
   --color-border-active: var(--border-active);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
   --shadow-rim-panel: var(--rim-panel);
   --shadow-rim-active: var(--rim-active);
   --shadow-dialog: var(--shadow-dialog);
@@ -78,38 +119,21 @@ textarea {
   font: inherit;
 }
 
-.message-response > :first-child {
-  margin-top: 0;
-}
-
-.message-response > :last-child {
-  margin-bottom: 0;
-}
-
-.message-response p,
-.message-response ul,
-.message-response ol,
-.message-response pre,
-.message-response blockquote {
-  margin: 0 0 12px;
-}
-
-.message-response ul,
-.message-response ol {
-  padding-left: 20px;
-}
-
-.message-response pre,
-.message-response code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.message-response pre {
-  overflow-x: auto;
-  border: 1px solid var(--border-quiet);
-  border-radius: var(--radius-row);
-  background: var(--color-space-900);
-  padding: 12px;
+.astra-blob {
+  --jelly-arm-deep: #6355d5;
+  --jelly-arm-light: #c4bbff;
+  --jelly-arm-mid: #8878f2;
+  --jelly-belly-glow: #b8afff;
+  --jelly-body-deep: #6557d9;
+  --jelly-body-mid: #8878f2;
+  --jelly-body-rim: #aaa0ff;
+  --jelly-body-top: #d2ccff;
+  --jelly-cheek: #c5bbff;
+  --jelly-cheek-deep: #aa9ff6;
+  --jelly-cheek-light: #e0dcff;
+  --jelly-eye-sparkle: #8878f2;
+  --jelly-outline-light: #a89bff;
+  --jelly-outline: #5145b8;
 }
 
 @keyframes reasoning-enter {
