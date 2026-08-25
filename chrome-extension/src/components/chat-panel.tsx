@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { ChatMessage } from "@/components/chat-message";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
+import { DEFAULT_MODEL_ID, type ModelId } from "@/lib/model-catalog";
 import { useEveAgent } from "eve/react";
 import { SquareIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -32,6 +33,7 @@ function Mark() {
 export function ChatPanel() {
   const agent = useEveAgent({ host: EVE_HOST });
   const [input, setInput] = useState("");
+  const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [sendFailed, setSendFailed] = useState(false);
   const [steering, setSteering] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -59,7 +61,10 @@ export function ChatPanel() {
     setInput("");
 
     try {
-      await agent.send(text, isBusy ? { turnPolicy: "steer" } : undefined);
+      await agent.send(text, {
+        clientContext: { astraModelId: modelId },
+        ...(isBusy ? { turnPolicy: "steer" as const } : {}),
+      });
     } catch {
       setSendFailed(true);
       setSteering(false);
@@ -118,7 +123,7 @@ export function ChatPanel() {
       </header>
 
       <div className="flex items-center justify-end gap-2 border-b border-border-quiet bg-space-900 px-4 py-2">
-        <RuntimeControls events={agent.events} />
+        <RuntimeControls events={agent.events} modelId={modelId} onModelChange={setModelId} />
       </div>
 
       <Conversation aria-label="Conversation with Eve">

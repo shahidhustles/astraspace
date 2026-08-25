@@ -3,13 +3,10 @@ import { BotIcon, CheckIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes } from "react";
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-// TODO(trusted-model-allowlist): The extension shows the single model the Eve
-// agent reports. When multi-model routing ships, replace this boundary with a
-// trusted backend allowlist and resolver. Never accept an arbitrary provider
-// model id from the extension.
-
 interface ModelSelectorValue {
-  readonly model: string | null;
+  readonly label: string;
+  readonly model: string;
+  readonly onModelChange: (model: string) => void;
   readonly open: boolean;
   readonly setOpen: (open: boolean) => void;
 }
@@ -23,13 +20,25 @@ function useContextValue(): ModelSelectorValue {
 }
 
 export type ModelSelectorProps = HTMLAttributes<HTMLDivElement> & {
-  readonly model: string | null;
+  readonly label: string;
+  readonly model: string;
+  readonly onModelChange: (model: string) => void;
 };
 
-export function ModelSelector({ children, className, model, ...props }: ModelSelectorProps) {
+export function ModelSelector({
+  children,
+  className,
+  label,
+  model,
+  onModelChange,
+  ...props
+}: ModelSelectorProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const value = useMemo(() => ({ model, open, setOpen }), [model, open]);
+  const value = useMemo(
+    () => ({ label, model, onModelChange, open, setOpen }),
+    [label, model, onModelChange, open],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -65,23 +74,24 @@ export function ModelSelector({ children, className, model, ...props }: ModelSel
 export type ModelSelectorTriggerProps = ComponentProps<"button">;
 
 export function ModelSelectorTrigger({ className, ...props }: ModelSelectorTriggerProps) {
-  const { model, open, setOpen } = useContextValue();
+  const { label, open, setOpen } = useContextValue();
 
   return (
     <button
       aria-expanded={open}
-      aria-label={model ? `Model ${model}` : "Model not reported"}
+      aria-haspopup="listbox"
+      aria-label={`Model ${label}`}
       className={cn(
         "flex max-w-44 items-center gap-1.5 rounded-control border border-border-quiet bg-space-850 px-2.5 py-1 text-[11px] font-medium leading-[1.3] text-ink-200 transition-colors hover:bg-space-800 hover:text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-950",
         className,
       )}
       onClick={() => setOpen(!open)}
-      title={model ?? undefined}
+      title={label}
       type="button"
       {...props}
     >
       <BotIcon aria-hidden className="size-3.5 shrink-0 text-ink-400" />
-      <span className="truncate">{model ?? "Model not reported"}</span>
+      <span className="truncate">{label}</span>
       <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-ink-600" />
     </button>
   );
@@ -99,6 +109,7 @@ export function ModelSelectorContent({ className, ...props }: ModelSelectorConte
         "absolute right-0 top-full z-20 mt-2 w-56 rounded-panel border border-border-quiet bg-space-900 p-1.5 shadow-dialog",
         className,
       )}
+      role="listbox"
       {...props}
     />
   );
@@ -110,23 +121,48 @@ export function ModelSelectorList({ className, ...props }: ModelSelectorListProp
   return <div className={cn("space-y-0.5", className)} {...props} />;
 }
 
-export type ModelSelectorItemProps = ComponentProps<"button">;
+export type ModelSelectorItemProps = Omit<ComponentProps<"button">, "value"> & {
+  readonly description: string;
+  readonly label: string;
+  readonly value: string;
+};
 
-export function ModelSelectorItem({ className, ...props }: ModelSelectorItemProps) {
-  const { model } = useContextValue();
+export function ModelSelectorItem({
+  className,
+  description,
+  label,
+  onClick,
+  value,
+  ...props
+}: ModelSelectorItemProps) {
+  const { model, onModelChange, setOpen } = useContextValue();
+  const selected = model === value;
 
   return (
     <button
-      aria-current="true"
+      aria-selected={selected}
       className={cn(
-        "flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-[12px] font-medium leading-[1.4] text-ink-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-900",
+        "flex w-full items-start gap-2 rounded-control px-2 py-2 text-left text-[12px] font-medium leading-[1.4] text-ink-50 transition-colors hover:bg-space-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring focus-visible:ring-offset-2 focus-visible:ring-offset-space-900",
         className,
       )}
+      onClick={(event) => {
+        onModelChange(value);
+        setOpen(false);
+        onClick?.(event);
+      }}
+      role="option"
       type="button"
       {...props}
     >
-      {model ? <CheckIcon aria-hidden className="size-3.5 shrink-0 text-orbit-400" /> : null}
-      <ModelSelectorName>{model ?? "Model not reported"}</ModelSelectorName>
+      <span className="mt-0.5 grid size-3.5 shrink-0 place-items-center">
+        {selected ? <CheckIcon aria-hidden className="size-3.5 text-orbit-400" /> : null}
+      </span>
+      <span className="min-w-0">
+        <ModelSelectorName>{label}</ModelSelectorName>
+        <span className="mt-0.5 block truncate text-[10px] font-normal text-ink-400">
+          {description}
+        </span>
+      </span>
     </button>
   );
 }

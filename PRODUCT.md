@@ -8,93 +8,123 @@ web
 
 ## Users
 
-Astra Space is for people who use browser agents on pages that may contain passwords, personal details, private documents, account data, faces, or confidential work. The primary user wants the agent to complete real browser tasks without sending raw page context to an external model.
+Astra Space is for people who want one agent to handle recurring digital work instead of starting a new chat for every task. They work across websites, documents, messages, calendars, internal tools, and private account data. They need the agent to remember context, take action, and return useful work without exposing raw sensitive information.
 
-The SIH 2026 judges are an important evaluation audience. They need visible proof that sensitive information stays on the device while the agent continues to work.
+Teams and organizations can use the same agent through the browser and messaging channels while keeping control over integrations, permissions, and credentials.
+
+The SIH 2026 judges are an important evaluation audience. They need to see a capable working agent and clear evidence that its browser context is sanitized on the device before an external model receives it.
 
 ## Product purpose
 
-Astra Space is a privacy-first browser agent. It inspects the active page locally, detects sensitive DOM, text, and visual content, sanitizes that context, and only then asks a cloud or on-premises model to reason about the next browser action.
+Astra Space is a personal work agent that can be reached where the user already works, act through the browser and connected tools, run tasks on a schedule, call reusable skills, delegate complex work to subagents, and deliver finished artifacts or messages.
 
-The core product loop is:
+The product is meant for work that continues beyond a single conversation. A user can ask Astra to complete a browser task now, schedule a routine for later, continue through Telegram or WhatsApp, or have several specialist agents prepare a larger result. Session, episodic, and semantic memory give that work continuity.
 
-1. Observe the current page on the device.
-2. Detect sensitive regions and values locally.
-3. Redact or replace them while preserving task meaning.
-4. Preview the exact sanitized context that may leave the device.
-5. Send the sanitized context to the reasoning model.
-6. Execute the returned browser action locally.
-7. Repeat until the task ends or needs user approval.
+Privacy is the trust layer beneath those capabilities. When Astra needs a live webpage, it detects and sanitizes sensitive page context locally before a cloud or on-premises model reasons about the next action.
 
-Success means the agent can finish a useful browser task while the privacy inspector proves that no original private values were sent to the model.
+Success means Astra completes useful work across time, tools, and channels while the user can inspect what it did, what it sent to a model, and which actions required approval.
 
 ## Positioning
 
-Most browser agents treat privacy as a policy around cloud processing. Astra Space places an inspectable privacy boundary on the user's device. The model receives a task-preserving representation such as `[EMAIL_1]` or `[PRIVATE_PASSWORD]`, while the original value remains local.
+Most AI assistants stop at conversation. Most browser agents focus on one active tab. Astra Space is a persistent agent for real work:
 
-The product must prove this mechanism in the interface. A privacy claim without an outbound payload preview is not enough.
+- it can respond now or start work from a schedule;
+- it can continue through the browser, Telegram, and WhatsApp;
+- it can use skills and connected tools instead of relying on one general prompt;
+- it can split a complex request among specialist subagents;
+- it can create documents, presentations, spreadsheets, reports, and code;
+- it can control the browser while filtering sensitive page context on the device.
+
+The central promise is not redaction by itself. It is an agent useful enough to trust with ongoing work, with a visible privacy boundary where browser data enters model context.
 
 ## Operating context
 
-Astra Space runs as a Chrome Manifest V3 extension. Users invoke it while working on a live webpage, give it a task, and watch the browser agent move through an observe, sanitize, reason, and act cycle.
+Astra Space runs primarily as a Chrome Manifest V3 extension backed by an Eve agent. The extension is the main place for browser control, live page inspection, task status, approvals, and agent conversation.
 
-The controlled SIH demonstration page contains names, email addresses, phone numbers, a password, an address, a face, normal text, forms, and buttons. The privacy inspector compares detected content with the sanitized screenshot and structured page representation sent to the model.
+The same agent can also receive and deliver work through messaging channels. Scheduled jobs can start recurring tasks without waiting for a new message. Skills encode repeatable procedures, subagents handle bounded parts of larger jobs, and connected tools let Astra work with external services.
 
-The current workspace is a Bun monorepo with a TypeScript and Vite Chrome extension plus an Eve-based agent package. The browser remains the primary place for browser-control tasks.
+For organizations that need to own the integration boundary, Watchtower is the planned self-hosted MCP and authentication gateway. It manages MCP servers, OAuth, tokens, tool permissions, and audit logs between Astra and enterprise systems.
+
+The controlled SIH demonstration page contains names, email addresses, phone numbers, a password, an address, a face, normal text, forms, and buttons. It proves that Astra can act on a real page after local sanitization, then show the exact context sent to the reasoning model.
+
+The current workspace is a Bun monorepo with a TypeScript, React, and Vite Chrome extension plus an Eve-based agent package.
 
 ## Capabilities and constraints
 
-### Core demonstration
+### Agent runtime
+
+- Stream a durable conversation with the Eve agent and expose the real configured model, context usage when measured, provider reasoning when supplied, steering, cancellation, and recoverable errors.
+- Keep session context for the active task, then add episodic memory for past workflows and semantic memory for durable preferences and facts.
+- Load reusable skills for research, report generation, data analysis, email drafting, meeting preparation, and other defined procedures.
+- Delegate bounded work to specialist subagents and combine their results in the main task.
+- Generate useful artifacts such as documents, presentations, spreadsheets, reports, and code files. Chat text is not the only output.
+- Run scheduled jobs for recurring work, monitoring, digests, preparation, and follow-up.
+- Receive and deliver work through the browser extension, Telegram, and WhatsApp. The browser remains the primary channel for browser-control tasks.
+
+### Browser action and local privacy
 
 - Capture the visible page and extract useful screen state locally.
 - Inspect DOM roles, labels, inputs, accessibility attributes, visible text, and element coordinates.
-- Detect sensitive data with DOM rules, text rules or local NLP, OCR, face detection, and lightweight local vision where needed.
+- Detect sensitive data using DOM rules, text rules or local NLP, OCR, face detection, and lightweight local vision where needed.
 - Support complete masking, partial masking, and semantic placeholders.
-- Produce a sanitized screenshot, a concise structured page representation, and redaction metadata.
-- Show detected categories, confidence, sanitized output, outbound payload, and action history in a privacy inspector.
+- Produce a sanitized screenshot, a structured page representation, and redaction metadata before model reasoning.
+- Show detected categories, confidence, transformed context, the outbound payload, and action history in a privacy inspector.
 - Receive structured actions such as click, type, scroll, select, navigate, and open tab, then execute them locally.
-- Keep original sensitive values on the device.
+- Keep original sensitive page values on the device.
 
-### Performance constraints
+### Integrations and control
 
-- Prefer DOM-first detection before expensive vision inference.
+- Connect to external services through MCP, OpenAPI, and authored tools with narrow permissions.
+- Require human approval for sensitive or consequential actions rather than relying on model instructions alone.
+- Use Watchtower as the planned self-hosted gateway for organization-owned credentials, permissions, and audit records.
+
+### Technical constraints
+
+- Prefer DOM and text detection before expensive vision inference.
 - Keep local models small enough for a browser runtime.
 - Use WebGPU when available and retain a WebAssembly fallback.
 - Track visual understanding accuracy, PII precision and recall, redaction precision, client resource use, and end-to-end latency.
+- Never invent counts, confidence, model usage, successful protection, or completed actions when runtime evidence is unavailable.
+- Treat MCP tool-output redaction as a separate unsolved boundary. Until it exists, Astra must not imply that connected-tool results receive the same protection as browser page context.
 
-### Additions after the core loop
+## Delivery status
 
-Session, episodic, and semantic memory may improve continuity across tasks. Reusable skills, artifact generation, subagent delegation, Telegram and WhatsApp access, and the self-hosted Watchtower MCP gateway extend Astra Space into real work. These additions must not weaken the local privacy boundary.
+The product direction includes the full agent system described above. The current implementation is earlier and narrower.
 
-MCP tool-output redaction is a separate future problem. Until that layer exists, the product must not imply that connected-tool output receives the same protection as browser page context.
+The repository currently proves a Chrome side-panel conversation connected to a local Eve agent, including streaming replies, steering, cancellation, real model and context telemetry when available, and provider reasoning when supplied. Browser observation, sanitization, browser actions, schedules, memory, skills, subagents, messaging channels, artifact generation, and Watchtower remain product capabilities to build and verify.
+
+Future product copy must distinguish implemented behavior from planned capability.
 
 ## Brand commitments
 
 The product name is **Astra Space**.
 
-The voice is calm, exact, and accountable. Labels should name what happened using plain language: "3 private values removed" and "No original values sent" are stronger than broad claims such as "Your data is completely safe."
+The voice is capable, direct, and accountable. Lead with work completed, time saved, or a result delivered. Explain privacy with evidence when it matters. Do not make sanitization the headline of every screen or describe a general-purpose agent as a privacy utility.
 
-`DESIGN.reference.md` is the design reference for token structure, dark surfaces, typography hierarchy, spacing, buttons, panels, focus treatments, and restrained glow. It is inspiration rather than a visual identity to copy. Astra Space must adapt that system to a privacy inspector and browser-agent workflow.
+Use concrete language such as "Prepare the briefing every weekday at 8:00," "Research delegated to two subagents," or "3 private values removed." Avoid claims such as "Works everywhere," "Fully autonomous," or "Your data is completely safe."
+
+`DESIGN.reference.md` is the design reference for token structure, dark surfaces, typography hierarchy, spacing, buttons, panels, focus treatments, and restrained glow. It is inspiration rather than a visual identity to copy.
 
 ## Evidence on hand
 
-- [`SIH 2026 PS 26171.md`](SIH%202026%20PS%2026171.md) defines the problem, evaluation criteria, core capabilities, and demonstration flow.
+- [`SIH 2026 PS 26171.md`](SIH%202026%20PS%2026171.md) defines the browser-agent problem, evaluation criteria, local privacy flow, memory model, skills, artifact generation, subagents, messaging channels, Watchtower concept, and demonstration flow.
+- [`docs/specs/extension-eve-streaming-chat.md`](docs/specs/extension-eve-streaming-chat.md) defines the first implemented user-interface slice and its limits.
+- `chrome-extension/` contains the current Manifest V3 React and TypeScript side-panel implementation.
+- `packages/agent-core/` contains the current Eve agent and installed framework documentation for schedules, skills, subagents, channels, connections, tools, and approvals.
 - [`DESIGN.reference.md`](DESIGN.reference.md) provides the approved design reference.
-- `chrome-extension/` contains the current Manifest V3 TypeScript and Vite scaffold.
-- `packages/agent-core/` contains the current Eve agent scaffold.
 
-There are no verified production benchmarks, customer testimonials, deployment claims, or measured privacy results in the repository. Product copy and demonstration screens must not invent them. Synthetic demo data must be labeled as demo data where a user could mistake it for a real result.
+There are no verified production benchmarks, customer testimonials, deployment claims, or measured privacy results in the repository. Product copy and demonstration screens must not invent them. Synthetic demo data must be labeled where a user could mistake it for a real result.
 
 ## Product principles
 
-1. **Sanitize before reasoning.** Raw browser context does not cross the local privacy boundary.
-2. **Make the boundary visible.** Users can inspect what Astra detected, changed, and sent.
-3. **Preserve task meaning.** Redaction hides private values without making the page unusable to the reasoning model.
-4. **Use the lightest reliable detector.** DOM and text evidence run before local vision work.
-5. **Earn broader capability.** Memory, integrations, and delegation come after the protected browser loop works end to end.
+1. **Finish work, not conversations.** Astra should return an action, artifact, update, or completed routine when the task calls for one.
+2. **Meet the user where the work happens.** The browser, messaging channels, schedules, and connected tools are entry points to the same agent.
+3. **Use specialists for specialist work.** Skills provide repeatable procedures, and subagents divide complex tasks into clear responsibilities.
+4. **Keep consequential actions inspectable.** Show progress, tool use, delegation, approvals, failures, and results in plain language.
+5. **Protect browser context before reasoning.** Raw sensitive page data does not cross the local privacy boundary, and the user can inspect the transformation.
 
 ## Accessibility and inclusion
 
-Accessibility is part of real-world usefulness, not a later polish pass. Astra Space must preserve page accessibility metadata during inspection, expose agent and privacy state without relying on color alone, support keyboard operation and visible focus, respect reduced-motion preferences, and keep critical privacy evidence readable at extension dimensions and browser zoom levels.
+Accessibility is part of real-world usefulness. Astra must preserve page accessibility metadata during inspection, expose agent state and privacy state without relying on color alone, support keyboard operation and visible focus, respect reduced-motion preferences, and remain readable at extension dimensions and browser zoom levels.
 
 The exact conformance target remains an open product decision.
