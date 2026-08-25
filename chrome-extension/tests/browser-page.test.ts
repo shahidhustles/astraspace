@@ -6,14 +6,60 @@ interface FakeBrowser extends Browser {
   pagesCalls: number;
   disconnectCalls: number;
   closeCalls: number;
+  connected: boolean;
 }
 
-function fakePage(): Page {
-  return {} as Page;
+interface FakePage extends Page {
+  gotoCalls: number;
+  goBackCalls: number;
+  reloadCalls: number;
+  currentUrl: string;
+  lastGotoArgs: [string, unknown] | null;
+  gotoError: Error | null;
+  goBackError: Error | null;
+  reloadError: Error | null;
 }
 
-function fakeBrowser(pages: Page[]): FakeBrowser {
+function fakePage(currentUrl = "https://example.com"): FakePage {
+  const page = {
+    gotoCalls: 0,
+    goBackCalls: 0,
+    reloadCalls: 0,
+    currentUrl,
+    lastGotoArgs: null,
+    gotoError: null,
+    goBackError: null,
+    reloadError: null,
+    goto: async (url: string, options?: unknown) => {
+      page.gotoCalls += 1;
+      page.lastGotoArgs = [url, options];
+      if (page.gotoError) {
+        throw page.gotoError;
+      }
+      return {};
+    },
+    goBack: async () => {
+      page.goBackCalls += 1;
+      if (page.goBackError) {
+        throw page.goBackError;
+      }
+      return {};
+    },
+    reload: async () => {
+      page.reloadCalls += 1;
+      if (page.reloadError) {
+        throw page.reloadError;
+      }
+      return {};
+    },
+    url: () => page.currentUrl,
+  } as FakePage;
+  return page;
+}
+
+function fakeBrowser(pages: Page[], options: { connected?: boolean } = {}): FakeBrowser {
   const browser = {
+    connected: options.connected ?? true,
     pagesCalls: 0,
     disconnectCalls: 0,
     closeCalls: 0,
@@ -31,17 +77,29 @@ function fakeBrowser(pages: Page[]): FakeBrowser {
   return browser;
 }
 
-function fakeDeps(): { deps: PageDeps; browser: FakeBrowser; connectTabCalls: () => number } {
+function timeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+function fakeDeps(
+  overrides: Partial<PageDeps> = {},
+  options: { connected?: boolean } = {},
+): { deps: PageDeps; browser: FakeBrowser; page: FakePage; connectTabCalls: () => number } {
   let connectTabCalls = 0;
-  const browser = fakeBrowser([fakePage()]);
+  const page = fakePage();
+  const browser = fakeBrowser([page], options);
   const deps: PageDeps = {
     connect: async () => browser,
     connectTab: async () => {
       connectTabCalls += 1;
       return {} as never;
     },
+    timeoutMs: 100,
+    ...overrides,
   };
-  return { deps, browser, connectTabCalls: () => connectTabCalls };
+  return { deps, browser, page, connectTabCalls: () => connectTabCalls };
 }
 
 describe("BrowserPage", () => {
@@ -93,12 +151,9 @@ describe("BrowserPage", () => {
   });
 
   test("attach fails and disconnects when the connection exposes no page", async () => {
-    const { deps } = fakeDeps();
     const emptyBrowser = fakeBrowser([]);
-    const page = new BrowserPage(7, "https://example.com", {
-      ...deps,
-      connect: async () => emptyBrowser,
-    });
+    const { deps } = fakeDeps({ connect: async () => emptyBrowser });
+    const page = new BrowserPage(7, "https://example.com", deps);
 
     const result = await page.attach();
 
@@ -124,6 +179,24 @@ describe("BrowserPage", () => {
     expect(result).toEqual({
       ok: false,
       error: { code: "attach_failed", message: "Failed to attach to tab" },
+    });
+    expect(page.attached).toBe(false);
+  });
+
+  test("attach returns attach_conflict when another debugger owns the tab", async () => {
+    const { deps } = fakeDeps();
+    const page = new BrowserPage(7, "https://example.com", {
+      ...deps,
+      connectTab: async () => {
+        throw new Error("Another debugger is already attached to the tab with id: 7");
+      },
+    });
+
+    const result = await page.attach();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "attach_conflict", message: "Another debugger is attached to the tab" },
     });
     expect(page.attached).toBe(false);
   });
@@ -180,5 +253,159 @@ describe("BrowserPage", () => {
 
     expect(browser.disconnectCalls).toBe(0);
     expect(page.attached).toBe(false);
+  });
+
+  test("navigate goes to an allowed destination and reports the final URL", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "https://example.com/page2";
+
+    const result = await wrapper.navigate("https://example.com/page2");
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/page2" });
+    expect(page.gotoCalls).toBe(1);
+    expect(page.lastGotoArgs).toEqual(["https://example.com/page2", { timeout: 100, waitUntil: "load" }]);
+  });
+
+  test("navigate rejects a blocked destination without calling goto", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.navigate("chrome://newtab");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
+    expect(page.gotoCalls).toBe(0);
+  });
+
+  test("navigate returns selected_tab_unavailable when not attached", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+
+    const result = await wrapper.navigate("https://example.com/page2");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    });
+    expect(page.gotoCalls).toBe(0);
+  });
+
+  test("navigate timeout keeps a connected wrapper reusable", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.gotoError = timeoutError("Navigation timeout of 100 ms exceeded");
+
+    const result = await wrapper.navigate("https://example.com/slow");
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } });
+    expect(wrapper.attached).toBe(true);
+  });
+
+  test("navigate timeout detaches a dead connection so a later attach can recover", async () => {
+    const { deps, page } = fakeDeps({}, { connected: false });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.gotoError = timeoutError("Navigation timeout of 100 ms exceeded");
+
+    const result = await wrapper.navigate("https://example.com/slow");
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } });
+    expect(wrapper.attached).toBe(false);
+    expect(wrapper.page).toBeNull();
+  });
+
+  test("navigate returns navigation_failed for other errors and keeps a live connection", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.gotoError = new Error("net::ERR_NAME_NOT_RESOLVED");
+
+    const result = await wrapper.navigate("https://example.com/missing");
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_failed", message: "Navigation failed" } });
+    expect(wrapper.attached).toBe(true);
+  });
+
+  test("navigate rejects a redirect to an unsupported page", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "chrome://newtab";
+
+    const result = await wrapper.navigate("https://example.com/redirect");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "unsupported_redirect", message: "Navigation ended on an unsupported page", url: "chrome://newtab" },
+    });
+  });
+
+  test("goBack navigates to the previous history entry", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "https://example.com/start";
+
+    const result = await wrapper.goBack();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
+    expect(page.goBackCalls).toBe(1);
+  });
+
+  test("goBack timeout returns navigation_timeout", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.goBackError = timeoutError("Navigation timeout of 100 ms exceeded");
+
+    const result = await wrapper.goBack();
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } });
+  });
+
+  test("reload reloads the current URL and re-checks it", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.reload();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com" });
+    expect(page.reloadCalls).toBe(1);
+  });
+
+  test("reload timeout returns navigation_timeout", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.reloadError = timeoutError("Navigation timeout of 100 ms exceeded");
+
+    const result = await wrapper.reload();
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } });
+  });
+
+  test("reload rejects a redirect to an unsupported page", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "https://chromewebstore.google.com/detail/xyz";
+
+    const result = await wrapper.reload();
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "unsupported_redirect",
+        message: "Navigation ended on an unsupported page",
+        url: "https://chromewebstore.google.com/detail/xyz",
+      },
+    });
   });
 });

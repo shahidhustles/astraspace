@@ -7,12 +7,17 @@ import {
 import { enforceUrlPolicy } from "./url-policy";
 import type { BrowserError, UrlPolicyResult } from "./types";
 
+const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
+
 export interface PageDeps {
   connect: (options: Parameters<typeof connect>[0]) => Promise<Browser>;
   connectTab: (tabId: number) => Promise<ExtensionTransport>;
+  timeoutMs: number;
 }
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
+
+export type NavResult = { ok: true; url: string } | { ok: false; error: BrowserError };
 
 export class BrowserPage {
   readonly tabId: number;
@@ -80,9 +85,64 @@ export class BrowserPage {
       await browser.disconnect();
     }
   }
+
+  async navigate(url: string): Promise<NavResult> {
+    const policy = enforceUrlPolicy(url);
+    if (!policy.ok) {
+      return { ok: false, error: policy.error };
+    }
+    return this.runNavigation((page) => page.goto(url, this.navOptions()));
+  }
+
+  async goBack(): Promise<NavResult> {
+    return this.runNavigation((page) => page.goBack(this.navOptions()));
+  }
+
+  async reload(): Promise<NavResult> {
+    return this.runNavigation((page) => page.reload(this.navOptions()));
+  }
+
+  private navOptions() {
+    return { timeout: this.deps.timeoutMs, waitUntil: "load" as const };
+  }
+
+  private async runNavigation(run: (page: Page) => Promise<unknown>): Promise<NavResult> {
+    if (!this.attached || !this.puppeteerPage) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+
+    const page = this.puppeteerPage;
+    try {
+      await run(page);
+    } catch (error) {
+      this.detachIfDisconnected();
+      if (error instanceof Error && error.name === "TimeoutError") {
+        return { ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } };
+      }
+      return { ok: false, error: { code: "navigation_failed", message: "Navigation failed" } };
+    }
+
+    const finalUrl = page.url();
+    const policy = enforceUrlPolicy(finalUrl);
+    if (!policy.ok) {
+      return {
+        ok: false,
+        error: { code: "unsupported_redirect", message: "Navigation ended on an unsupported page", url: finalUrl },
+      };
+    }
+    return { ok: true, url: finalUrl };
+  }
+
+  private detachIfDisconnected(): void {
+    if (this.browser && !this.browser.connected) {
+      this.browser = null;
+      this.puppeteerPage = null;
+    }
+  }
 }
 
 const defaultDeps: PageDeps = {
   connect,
   connectTab: (tabId) => ExtensionTransport.connectTab(tabId),
+  timeoutMs: DEFAULT_NAVIGATION_TIMEOUT_MS,
 };

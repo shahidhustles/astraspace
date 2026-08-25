@@ -6,12 +6,49 @@ import type { DiagnosticEvent } from "../src/browser/types";
 
 interface FakeBrowser extends Browser {
   disconnectCalls: number;
+  connected: boolean;
 }
 
-function fakeBrowser(): FakeBrowser {
+interface FakePage extends Page {
+  gotoCalls: number;
+  goBackCalls: number;
+  reloadCalls: number;
+  currentUrl: string;
+  gotoError: Error | null;
+}
+
+function fakePage(): FakePage {
+  const page = {
+    gotoCalls: 0,
+    goBackCalls: 0,
+    reloadCalls: 0,
+    currentUrl: "https://example.com",
+    gotoError: null,
+    goto: async () => {
+      page.gotoCalls += 1;
+      if (page.gotoError) {
+        throw page.gotoError;
+      }
+      return {};
+    },
+    goBack: async () => {
+      page.goBackCalls += 1;
+      return {};
+    },
+    reload: async () => {
+      page.reloadCalls += 1;
+      return {};
+    },
+    url: () => page.currentUrl,
+  } as FakePage;
+  return page;
+}
+
+function fakeBrowser(page: FakePage = fakePage()): FakeBrowser {
   const browser = {
+    connected: true,
     disconnectCalls: 0,
-    pages: async () => [{ id: "page-1" } as Page],
+    pages: async () => [page],
     disconnect: async () => {
       browser.disconnectCalls += 1;
     },
@@ -31,6 +68,7 @@ interface FakeDeps {
   events: DiagnosticEvent[];
   connectTabCalls: () => number;
   api: FakeEvents;
+  page: FakePage;
 }
 
 function setup(overrides: {
@@ -43,7 +81,8 @@ function setup(overrides: {
   timeoutMs?: number;
 } = {}): FakeDeps {
   let connectTabCalls = 0;
-  const browser = fakeBrowser();
+  const page = fakePage();
+  const browser = fakeBrowser(page);
   const events: DiagnosticEvent[] = [];
   const updatedListeners = new Set<
     (tabId: number, changeInfo: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => void
@@ -92,7 +131,7 @@ function setup(overrides: {
     activatedListenerCount: () => activatedListeners.size,
   };
 
-  return { context, events, connectTabCalls: () => connectTabCalls, api };
+  return { context, events, connectTabCalls: () => connectTabCalls, api, page };
 }
 
 function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] {
@@ -492,6 +531,109 @@ describe("BrowserContext", () => {
     expect(await pending).toEqual({
       ok: false,
       error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
+  });
+
+  test("navigate returns selected_tab_unavailable when nothing is selected", async () => {
+    const { context } = setup({});
+
+    const result = await context.navigate("https://example.com/target");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    });
+  });
+
+  test("navigate changes the selected tab to an allowed destination", async () => {
+    const { context, page } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+    page.currentUrl = "https://example.com/target";
+
+    const result = await context.navigate("https://example.com/target");
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/target" });
+    expect(page.gotoCalls).toBe(1);
+    expect(context.selectedTabId).toBe(7);
+  });
+
+  test("navigate rejects a blocked destination without touching selection or connections", async () => {
+    const { context, page } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+
+    const result = await context.navigate("chrome://newtab");
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
+    expect(page.gotoCalls).toBe(0);
+    expect(context.selectedTabId).toBe(7);
+    expect(context.tabCount).toBe(1);
+  });
+
+  test("navigate failure keeps the selection and other tab connections intact", async () => {
+    let nextId = 10;
+    const { context, api, page } = setup({
+      createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
+    });
+
+    const first = context.openTab("https://a.example");
+    const second = context.openTab("https://b.example");
+    await Promise.resolve();
+    await Promise.resolve();
+    api.emitUpdated({ id: 10, url: "https://a.example" });
+    api.emitUpdated({ id: 11, url: "https://b.example" });
+    await Promise.all([first, second]);
+
+    page.gotoError = new Error("net::ERR_INTERNET_DISCONNECTED");
+    const result = await context.navigate("https://c.example");
+
+    expect(result).toEqual({ ok: false, error: { code: "navigation_failed", message: "Navigation failed" } });
+    expect(context.selectedTabId).toBe(11);
+    expect(context.tabCount).toBe(2);
+  });
+
+  test("goBack returns the selected tab to its previous history entry", async () => {
+    const { context, page } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+    page.currentUrl = "https://example.com/start";
+
+    const result = await context.goBack();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
+    expect(page.goBackCalls).toBe(1);
+  });
+
+  test("goBack returns selected_tab_unavailable when nothing is selected", async () => {
+    const { context } = setup({});
+
+    const result = await context.goBack();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    });
+  });
+
+  test("refresh reloads the selected tab", async () => {
+    const { context, page } = setup({ tabs: activeTab() });
+    await context.useActiveTab();
+
+    const result = await context.refresh();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com" });
+    expect(page.reloadCalls).toBe(1);
+  });
+
+  test("refresh returns selected_tab_unavailable when nothing is selected", async () => {
+    const { context } = setup({});
+
+    const result = await context.refresh();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
     });
   });
 });

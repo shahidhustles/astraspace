@@ -1,5 +1,5 @@
 import { enforceUrlPolicy } from "./url-policy";
-import { BrowserPage, type AttachResult, type PageDeps } from "./page";
+import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
 import type { BrowserError, DiagnosticEvent, TabInfo } from "./types";
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
@@ -184,6 +184,41 @@ export class BrowserContext {
       return { ok: false, error: policy.error };
     }
     return this.attachTab(tabId, tab.url);
+  }
+
+  async navigate(url: string): Promise<NavResult> {
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.navigate(url);
+  }
+
+  async goBack(): Promise<NavResult> {
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.goBack();
+  }
+
+  async refresh(): Promise<NavResult> {
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.reload();
+  }
+
+  private selectedPage(): BrowserPage | null {
+    if (this.selectedTab === null) {
+      return null;
+    }
+    const page = this.pages.get(this.selectedTab);
+    if (!page || !page.attached) {
+      return null;
+    }
+    return page;
   }
 
   private attachTab(tabId: number, url: string): Promise<AttachResult> {

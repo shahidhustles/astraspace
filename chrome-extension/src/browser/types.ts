@@ -50,6 +50,27 @@ export interface LifecycleTimeoutError {
   message: string;
 }
 
+export interface SelectedTabUnavailableError {
+  code: "selected_tab_unavailable";
+  message: string;
+}
+
+export interface UnsupportedRedirectError {
+  code: "unsupported_redirect";
+  message: string;
+  url: string;
+}
+
+export interface NavigationTimeoutError {
+  code: "navigation_timeout";
+  message: string;
+}
+
+export interface NavigationFailedError {
+  code: "navigation_failed";
+  message: string;
+}
+
 export interface TabInfo {
   tabId: number;
   url: string;
@@ -68,7 +89,11 @@ export type BrowserError =
   | AttachConflictError
   | MissingTabError
   | ChromeApiError
-  | LifecycleTimeoutError;
+  | LifecycleTimeoutError
+  | SelectedTabUnavailableError
+  | UnsupportedRedirectError
+  | NavigationTimeoutError
+  | NavigationFailedError;
 
 export type UrlPolicyResult =
   | { ok: true; url: string }
