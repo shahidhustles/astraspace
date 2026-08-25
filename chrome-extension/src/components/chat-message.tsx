@@ -1,4 +1,9 @@
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning";
 import type { EveMessage } from "eve/react";
 
 interface ChatMessageProps {
@@ -6,21 +11,42 @@ interface ChatMessageProps {
 }
 
 export function ChatMessage({ message }: ChatMessageProps) {
-  const textParts = message.parts.filter((part) => part.type === "text");
+  const hasRenderablePart = message.parts.some(
+    (part) => part.type === "text" || part.type === "reasoning",
+  );
 
-  if (textParts.length === 0) return null;
+  if (!hasRenderablePart) return null;
 
   return (
     <Message from={message.role}>
       <MessageContent>
-        {textParts.map((part, index) => (
-          <MessageResponse
-            isAnimating={part.state === "streaming"}
-            key={`${message.id}:text:${index}`}
-          >
-            {part.text}
-          </MessageResponse>
-        ))}
+        {message.parts.map((part, index) => {
+          if (part.type === "text") {
+            return (
+              <MessageResponse
+                isAnimating={part.state === "streaming"}
+                key={`${message.id}:text:${index}`}
+              >
+                {part.text}
+              </MessageResponse>
+            );
+          }
+
+          if (part.type === "reasoning") {
+            return (
+              <Reasoning
+                defaultOpen
+                isStreaming={part.state === "streaming"}
+                key={`${message.id}:reasoning:${index}`}
+              >
+                <ReasoningTrigger />
+                <ReasoningContent>{part.text}</ReasoningContent>
+              </Reasoning>
+            );
+          }
+
+          return null;
+        })}
       </MessageContent>
     </Message>
   );

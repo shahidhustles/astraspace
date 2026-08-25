@@ -112,6 +112,21 @@ textarea {
   padding: 12px;
 }
 
+@keyframes reasoning-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reasoning-content {
+  animation: reasoning-enter 180ms ease-out;
+}
+
 @keyframes status-pulse {
   0%,
   100% {

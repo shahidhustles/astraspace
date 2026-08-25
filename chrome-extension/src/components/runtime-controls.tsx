@@ -16,7 +16,12 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
 import { EVE_HOST } from "@/lib/eve-config";
-import { fetchAgentContextWindow, latestModelCall } from "@/lib/eve-runtime-metadata";
+import {
+  calculateUsedTokens,
+  fetchEveRuntimeMetadata,
+  latestModelCall,
+  type EveRuntimeMetadata,
+} from "@/lib/eve-runtime-metadata";
 import type { MessageStreamEvent } from "eve/client";
 import { useEffect, useMemo, useState } from "react";
 
@@ -26,37 +31,25 @@ export interface RuntimeControlsProps {
 
 export function RuntimeControls({ events }: RuntimeControlsProps) {
   const call = useMemo(() => latestModelCall(events), [events]);
-  const [maxTokens, setMaxTokens] = useState<number | null>(null);
+  const [runtimeMetadata, setRuntimeMetadata] = useState<EveRuntimeMetadata | null>(null);
 
   useEffect(() => {
-    if (maxTokens !== null) return;
     let active = true;
-    void fetchAgentContextWindow(EVE_HOST).then((tokens) => {
-      if (active) setMaxTokens(tokens);
+    void fetchEveRuntimeMetadata(EVE_HOST).then((metadata) => {
+      if (active) setRuntimeMetadata(metadata);
     });
     return () => {
       active = false;
     };
-  }, [call.modelId, maxTokens]);
+  }, []);
 
   const usage = call.usage;
-  const hasUsage = Boolean(
-    usage &&
-      (usage.inputTokens !== undefined ||
-        usage.outputTokens !== undefined ||
-        usage.cacheReadTokens !== undefined ||
-        usage.cacheWriteTokens !== undefined),
-  );
-  const usedTokens = hasUsage
-    ? (usage!.inputTokens ?? 0) +
-      (usage!.outputTokens ?? 0) +
-      (usage!.cacheReadTokens ?? 0) +
-      (usage!.cacheWriteTokens ?? 0)
-    : undefined;
+  const usedTokens = calculateUsedTokens(usage);
+  const modelId = call.modelId ?? runtimeMetadata?.modelId ?? null;
 
   return (
     <div className="flex items-center gap-2">
-      <ModelSelector model={call.modelId}>
+      <ModelSelector model={modelId}>
         <ModelSelectorTrigger />
         <ModelSelectorContent>
           <ModelSelectorList>
@@ -66,7 +59,7 @@ export function RuntimeControls({ events }: RuntimeControlsProps) {
       </ModelSelector>
 
       <Context
-        maxTokens={maxTokens ?? undefined}
+        maxTokens={runtimeMetadata?.contextWindowTokens ?? undefined}
         usage={usage ?? undefined}
         usedTokens={usedTokens}
       >

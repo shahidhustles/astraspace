@@ -13,6 +13,19 @@ export interface EveModelCall {
   readonly usage: EveStepUsage | null;
 }
 
+export interface EveRuntimeMetadata {
+  readonly contextWindowTokens: number | null;
+  readonly modelId: string | null;
+}
+
+export function calculateUsedTokens(usage: EveStepUsage | null): number | undefined {
+  if (!usage || (usage.inputTokens === undefined && usage.outputTokens === undefined)) {
+    return undefined;
+  }
+
+  return (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+}
+
 export function latestModelCall(events: readonly MessageStreamEvent[]): EveModelCall {
   let modelId: string | null = null;
   let usage: EveStepUsage | null = null;
@@ -25,11 +38,17 @@ export function latestModelCall(events: readonly MessageStreamEvent[]): EveModel
   return { modelId, usage };
 }
 
-export async function fetchAgentContextWindow(host: string): Promise<number | null> {
+export async function fetchEveRuntimeMetadata(host: string): Promise<EveRuntimeMetadata | null> {
   try {
     const info = await new Client({ host }).info();
-    const tokens = info.agent.model.contextWindowTokens;
-    return typeof tokens === "number" && tokens > 0 ? tokens : null;
+    const model = info.agent.model;
+    const contextWindowTokens =
+      typeof model.contextWindowTokens === "number" && model.contextWindowTokens > 0
+        ? model.contextWindowTokens
+        : null;
+    const modelId = typeof model.id === "string" ? model.id : null;
+
+    return { contextWindowTokens, modelId };
   } catch {
     return null;
   }
