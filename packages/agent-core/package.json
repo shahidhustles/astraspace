@@ -1,0 +1,16 @@
+{
+  "name": "@astra-space/agent",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "eve dev",
+    "check": "eve info"
+  },
+  "dependencies": {
+    "@vercel/connect": "0.4.3",
+    "ai": "^7.0.58",
+    "eve": "^0.44.4",
+    "zod": "4.4.3"
+  }
+}

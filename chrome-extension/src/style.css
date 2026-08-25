@@ -1,0 +1,16 @@
+:root {
+  color: #f5f5f5;
+  background: #111111;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+body {
+  min-width: 320px;
+  min-height: 180px;
+  margin: 0;
+}
+
+#app {
+  padding: 24px;
+}
+
