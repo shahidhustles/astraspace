@@ -47,7 +47,16 @@ function findChrome(): string | null {
 
 const chromePath = findChrome();
 
-describe.skipIf(chromePath === null)("live viewport synchronization", () => {
+function requireChromePath(): string {
+  if (chromePath === null) {
+    throw new Error(
+      "Chrome is required for browser observation integration tests. Set PUPPETEER_EXECUTABLE_PATH.",
+    );
+  }
+  return chromePath;
+}
+
+describe("live viewport synchronization", () => {
   let browser: Browser;
   let page: Page;
   let server: ReturnType<typeof Bun.serve>;
@@ -55,6 +64,7 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
   let fixtureUrl: string;
 
   beforeAll(async () => {
+    const executablePath = requireChromePath();
     const html = await Bun.file(FIXTURE_PATH).text();
     server = Bun.serve({
       port: 0,
@@ -63,7 +73,7 @@ describe.skipIf(chromePath === null)("live viewport synchronization", () => {
     fixtureUrl = `http://127.0.0.1:${server.port}/browser-observation.html`;
 
     browser = await puppeteer.launch({
-      executablePath: chromePath as string,
+      executablePath,
       headless: true,
       args: ["--no-sandbox"],
       defaultViewport: {
