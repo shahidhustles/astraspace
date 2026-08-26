@@ -273,6 +273,12 @@ export class BrowserPage {
   }
 
   commitObservation(staged: StagedObservation): ObserveResult {
+    if (this.identityTracker) {
+      const live = this.identityTracker.identity;
+      if (live.documentEpoch !== staged.documentEpoch || live.navigationEpoch !== staged.navigationEpoch) {
+        return this.failCapture();
+      }
+    }
     const committed = this.snapshots.commit({
       tabId: this.tabId,
       documentEpoch: staged.documentEpoch,

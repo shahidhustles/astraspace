@@ -4,6 +4,7 @@ import { Window } from "happy-dom";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserContext } from "../src/browser/context";
 import type { PageDeps } from "../src/browser/page";
+import { SnapshotStore } from "../src/browser/snapshot";
 import type { BrowserState } from "../src/browser/types";
 
 const VIEWPORT_WIDTH = 800;
@@ -52,7 +53,9 @@ function fixtureWindow(): Window {
 interface FakePage extends Page {
   currentUrl: string;
   evaluateError: Error | null;
+  screenshotCalls: number;
   screenshotError: Error | null;
+  screenshotGate: Promise<void> | null;
 }
 
 interface FakeBrowser extends Browser {
@@ -77,7 +80,9 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
   const page = {
     currentUrl,
     evaluateError: null,
+    screenshotCalls: 0,
     screenshotError: null,
+    screenshotGate: null,
     url: () => page.currentUrl,
     createCDPSession: async () => new FakeSession(),
     evaluate: async (expression: string): Promise<unknown> => {
@@ -108,6 +113,8 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
       snapshot: async () => null,
     },
     screenshot: async () => {
+      page.screenshotCalls += 1;
+      await page.screenshotGate;
       if (page.screenshotError) {
         throw page.screenshotError;
       }
@@ -131,6 +138,7 @@ interface FakeDeps {
   context: BrowserContext;
   page: FakePage;
   win: Window;
+  store: SnapshotStore;
 }
 
 function setup(options: {
@@ -138,16 +146,19 @@ function setup(options: {
   allTabs?: chrome.tabs.Tab[];
   page?: (win: Window) => FakePage;
   queryTabsError?: Error;
+  snapshotStore?: SnapshotStore;
 } = {}): FakeDeps {
   const win = fixtureWindow();
   const page = options.page ? options.page(win) : fakePage(win);
   const browser = fakeBrowser(page);
+  const store = options.snapshotStore ?? new SnapshotStore();
   const pageDeps: PageDeps = {
     connect: async () => browser,
     connectTab: async () => {
       return {} as never;
     },
     timeoutMs: 100,
+    snapshotStore: store,
   };
 
   const context = new BrowserContext({
@@ -167,11 +178,16 @@ function setup(options: {
     timeoutMs: 100,
   });
 
-  return { context, page, win };
+  return { context, page, win, store };
 }
 
 function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] {
   return [{ id: 7, url: "https://fixture.test/", ...overrides } as chrome.tabs.Tab];
+}
+
+function sequencedUuids(): () => string {
+  let next = 0;
+  return () => `snap-${(next += 1)}`;
 }
 
 describe("BrowserContext.observe", () => {
@@ -207,6 +223,22 @@ describe("BrowserContext.observe", () => {
       height: 4,
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(Object.keys(state).sort()).toEqual(
+      [
+        "documentEpoch",
+        "dom",
+        "navigationEpoch",
+        "refs",
+        "screenshot",
+        "scroll",
+        "snapshotId",
+        "snapshotVersion",
+        "tabId",
+        "tabs",
+        "title",
+        "url",
+      ].sort(),
+    );
   });
 
   test("returns selected_tab_unavailable when no live connection is selected", async () => {
@@ -277,5 +309,85 @@ describe("BrowserContext.observe", () => {
     expect(state.tabId).toBe(7);
     expect(state.tabs[0]).toMatchObject({ tabId: 7, selected: true });
     expect(state.dom).toContain("[1]<input role=textbox");
+  });
+
+  test("a tab-list failure after capture returns no state, commits no version, and makes prior targets stale", async () => {
+    type SetupOptions = Parameters<typeof setup>[0];
+    const options: SetupOptions = {
+      tabs: activeTab(),
+      allTabs: [{ id: 7, url: "https://fixture.test/", title: "Context fixture" } as chrome.tabs.Tab],
+      snapshotStore: new SnapshotStore({ createUuid: sequencedUuids() }),
+    };
+    const { context, store } = setup(options);
+    await context.useActiveTab();
+
+    const first = await context.observe();
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("expected success");
+
+    options.queryTabsError = new Error("boom");
+    const failed = await context.observe();
+
+    expect(failed).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Browser observation failed" },
+    });
+    expect("state" in failed).toBe(false);
+    expect(
+      store.lookup(
+        { tabId: 7, snapshotId: first.state.snapshotId, ref: 1 },
+        { documentEpoch: 0, navigationEpoch: 0 },
+      ),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
+
+    options.queryTabsError = undefined;
+    const third = await context.observe();
+
+    expect(third.ok).toBe(true);
+    if (!third.ok) throw new Error("expected success");
+    expect(third.state.snapshotVersion).toBe(2);
+  });
+
+  test("serializes overlapping observations so complete states commit in request order", async () => {
+    let releaseScreenshot: (() => void) | null = null;
+    const { context, page } = setup({
+      tabs: activeTab(),
+      allTabs: [{ id: 7, url: "https://fixture.test/", title: "Context fixture" } as chrome.tabs.Tab],
+      snapshotStore: new SnapshotStore({ createUuid: sequencedUuids() }),
+      page: (win) => {
+        const page = fakePage(win);
+        page.screenshotGate = new Promise<void>((resolve) => {
+          releaseScreenshot = resolve;
+        });
+        return page;
+      },
+    });
+    await context.useActiveTab();
+
+    const first = context.observe();
+    while (page.screenshotCalls === 0) {
+      await Promise.resolve();
+    }
+    const second = context.observe();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.screenshotCalls).toBe(1);
+    releaseScreenshot?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.ok).toBe(true);
+    expect(secondResult.ok).toBe(true);
+    if (!firstResult.ok || !secondResult.ok) throw new Error("expected success");
+    expect(page.screenshotCalls).toBe(2);
+    expect(firstResult.state.snapshotVersion).toBe(1);
+    expect(secondResult.state.snapshotVersion).toBe(2);
+    expect(firstResult.state.snapshotId).not.toBe(secondResult.state.snapshotId);
+    for (const state of [firstResult.state, secondResult.state]) {
+      expect(state.tabId).toBe(7);
+      expect(state.tabs[0]).toMatchObject({ tabId: 7, selected: true });
+      expect(state.dom).toContain("[1]<input role=textbox");
+      expect(state.refs.map((r) => r.ref)).toEqual([1, 2, 3]);
+    }
   });
 });

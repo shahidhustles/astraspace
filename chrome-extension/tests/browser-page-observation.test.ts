@@ -12,7 +12,7 @@ import {
 import type { ExtractedPageContent } from "../src/browser/observation";
 import { SnapshotStore } from "../src/browser/snapshot";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
-import type { PageObservation } from "../src/browser/types";
+import type { PageObservation, SnapshotId } from "../src/browser/types";
 
 const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
@@ -481,5 +481,37 @@ describe("BrowserPage.observe", () => {
       error: { code: "observation_failed", message: "Page observation failed" },
     });
     expect(overlayNodes(win.document)).toHaveLength(0);
+  });
+
+  test("rejects a staged commit when the frame identity changes before commit", async () => {
+    const win = fixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, session } = fakeDeps(win, "https://fixture.test/", store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const staged = await wrapper.stageObservation();
+    expect(staged.ok).toBe(true);
+    if (!staged.ok) throw new Error("expected success");
+
+    session.emit("Page.frameNavigated", {
+      frame: { id: "main-1", loaderId: "L2", url: "https://fixture.test/next" },
+      type: "Navigation",
+    });
+
+    const committed = wrapper.commitObservation(staged.staged);
+
+    expect(committed).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(
+      store.lookup({ tabId: 7, snapshotId: "snap-1" as SnapshotId, ref: 1 }, { documentEpoch: 0, navigationEpoch: 0 }),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
+
+    const retry = await wrapper.observe();
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("expected success");
+    expect(retry.state.snapshotVersion).toBe(1);
   });
 });

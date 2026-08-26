@@ -38,6 +38,7 @@ export class BrowserContext {
   private readonly deps: ContextDeps;
   private readonly stopListeners: (() => void)[] = [];
   private selectedTab: number | null = null;
+  private observeQueue: Promise<unknown> = Promise.resolve();
 
   constructor(deps: Partial<ContextDeps> = {}) {
     this.deps = {
@@ -220,25 +221,40 @@ export class BrowserContext {
   }
 
   async observe(): Promise<ObservationResult> {
+    const result = this.observeQueue.then(() => this.performObserve());
+    this.observeQueue = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  private async performObserve(): Promise<ObservationResult> {
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
 
-    const pageResult = await page.observe();
-    if (!pageResult.ok) {
-      return pageResult;
+    const staged = await page.stageObservation();
+    if (!staged.ok) {
+      return staged;
     }
 
     const tabsResult = await this.listTabs();
     if (!tabsResult.ok) {
+      page.invalidateTargets();
       return {
         ok: false,
         error: { code: "observation_failed", message: "Browser observation failed" },
       };
     }
 
-    return { ok: true, state: { ...pageResult.state, tabs: tabsResult.tabs } };
+    const committed = page.commitObservation(staged.staged);
+    if (!committed.ok) {
+      return committed;
+    }
+
+    return { ok: true, state: { ...committed.state, tabs: tabsResult.tabs } };
   }
 
   async goBack(): Promise<NavResult> {
