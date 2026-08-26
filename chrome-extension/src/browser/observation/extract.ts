@@ -170,9 +170,6 @@ export function visitElement(
   owners: OwnerMap,
 ): ExtractedElement | ExtractedFrame | null {
   const tag = el.tagName.toLowerCase();
-  if (tag === "iframe") {
-    return { kind: "frame", frameId: owners[JSON.stringify(domPath)] ?? null, children: [] };
-  }
   if (IGNORED_TAGS.has(tag)) {
     return null;
   }
@@ -199,16 +196,22 @@ export function visitElement(
     }
   }
 
-  const interactive = isInteractiveElement(el, style);
+  if (tag === "iframe") {
+    return { kind: "frame", frameId: owners[JSON.stringify(domPath)] ?? null, children: [] };
+  }
+
+  const opaqueCustomElement = tag.includes("-") && el.shadowRoot === null;
+  const interactive = !opaqueCustomElement && isInteractiveElement(el, style);
   const disabled = interactive && isDisabled(el);
   const actionable = interactive && !disabled && !insideActionable;
   const sensitive = isSensitiveControl(el, tag);
+  const computedName = interactive ? computeAccessibleName(win, el) : null;
   const locators = actionable ? locatorSegments(el, win.document) : null;
   const node: ExtractedElement = {
     kind: "element",
     tag,
     role: computeRole(el),
-    name: interactive ? computeAccessibleName(win, el) : null,
+    name: sensitive && sensitiveName(el, computedName) ? null : computedName,
     attrs: collectAttrs(el, tag, sensitive),
     interactive,
     disabled,
@@ -267,6 +270,26 @@ export function visitElement(
     }
   }
   return node;
+}
+
+export function sensitiveName(el: Element, name: string | null): boolean {
+  if (!name) {
+    return false;
+  }
+  const normalizedName = collapse(name);
+  const unsafeSources = [
+    el.getAttribute("aria-label") ?? "",
+    el.getAttribute("placeholder") ?? "",
+    el.getAttribute("title") ?? "",
+    "value" in el && typeof el.value === "string" ? el.value : "",
+  ];
+  return unsafeSources.some((source) => {
+    const normalizedSource = collapse(source);
+    return normalizedSource.length > 0 && (
+      normalizedName === normalizedSource ||
+      (normalizedSource.length >= 3 && normalizedName.includes(normalizedSource))
+    );
+  });
 }
 
 export function locatorSegments(el: Element, doc: Document): { css: string[]; xpath: string[] } {
@@ -399,6 +422,9 @@ export function isSensitiveControl(el: Element, tag = el.tagName.toLowerCase()):
 export function collectAttrs(el: Element, tag: string, sensitive = isSensitiveControl(el, tag)): Record<string, string> {
   const attrs: Record<string, string> = {};
   for (const name of ATTR_ALLOWLIST) {
+    if (sensitive && name !== "type") {
+      continue;
+    }
     if (el.hasAttribute(name)) {
       attrs[name] = el.getAttribute(name) as string;
     }

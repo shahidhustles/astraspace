@@ -108,6 +108,11 @@ class FakeElementHandle {
 }
 
 class FakeFrame {
+  frameElementSequence: Array<FakeElementHandle | null> | null = null;
+  accessibility = {
+    snapshot: async (): Promise<SerializableAXNode | null> => null,
+  };
+
   constructor(
     readonly win: Window,
     readonly evaluateCalls: string[],
@@ -123,6 +128,9 @@ class FakeFrame {
   }
 
   async frameElement(): Promise<FakeElementHandle | null> {
+    if (this.frameElementSequence && this.frameElementSequence.length > 0) {
+      return this.frameElementSequence.shift() ?? null;
+    }
     return this.frameElementHandle;
   }
 
@@ -252,6 +260,22 @@ function fakePage(
       return JPEG_BASE64;
     },
   } as FakePage;
+  const snapshot = async (): Promise<SerializableAXNode | null> => page.axSnapshots.shift() ?? null;
+  const assignAccessibility = (frame: FakeFrame): void => {
+    frame.accessibility.snapshot = snapshot;
+    for (const iframe of frame.win.document.querySelectorAll("iframe")) {
+      const rect = iframe.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        Object.defineProperty(iframe, "getBoundingClientRect", {
+          value: () => ({ x: 100, y: 50, width: 300, height: 200 }),
+        });
+      }
+    }
+    for (const child of frame.children) {
+      assignAccessibility(child);
+    }
+  };
+  assignAccessibility(mainFrame);
   return { page, mainFrame };
 }
 
@@ -829,6 +853,56 @@ describe("BrowserPage.observe", () => {
     });
   });
 
+  test("an iframe owner disappearing during capture fails the complete observation", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `<button id="main-btn">Main action</button><iframe id="frame"></iframe>`;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 400, innerHeight: 300 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const owner = new FakeElementHandle(iframe, parentWin, 101);
+    const childFrame = new FakeFrame(childWin, [], [], owner, null, () => 201);
+    childFrame.frameElementSequence = [owner, owner, null];
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.axSnapshots = [
+      { role: "button", name: "Main action" },
+      { role: "button", name: "Child action" },
+    ];
+    const wrapper = new BrowserPage(7, "https://fixture.test/", {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    });
+    await wrapper.attach();
+
+    const result = await wrapper.observe();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+  });
+
   test("an iframe missing from the owners map fails the observation", async () => {
     const parentWin = new Window({
       url: "https://fixture.test/",
@@ -1167,6 +1241,9 @@ describe("BrowserPage.observe", () => {
     Object.defineProperty(host, "getBoundingClientRect", {
       value: () => ({ x: 8, y: 48, width: 300, height: 200 }),
     });
+    Object.defineProperty(iframe, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 48, width: 300, height: 200 }),
+    });
 
     const childWin = new Window({ url: "https://child.test/", innerWidth: 400, innerHeight: 300 });
     childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
@@ -1223,7 +1300,15 @@ describe("BrowserPage.observe", () => {
       value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
     });
     Object.defineProperty(iframe, "getBoundingClientRect", {
-      value: () => ({ x: 100, y: 50, width: 300, height: 200 }),
+      value: () => ({ x: 100, y: 50, width: 600, height: 400 }),
+    });
+    Object.defineProperties(iframe, {
+      offsetWidth: { value: 300 },
+      offsetHeight: { value: 200 },
+      clientWidth: { value: 296 },
+      clientHeight: { value: 196 },
+      clientLeft: { value: 2 },
+      clientTop: { value: 2 },
     });
 
     const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
@@ -1264,7 +1349,7 @@ describe("BrowserPage.observe", () => {
     if (!result.ok) throw new Error("expected success");
     expect(result.state.refs.map((r) => r.ref)).toEqual([1, 2]);
     expect(result.state.refs[0].bounds).toEqual({ x: 8, y: 8, width: 90, height: 28 });
-    expect(result.state.refs[1].bounds).toEqual({ x: 108, y: 58, width: 90, height: 28 });
+    expect(result.state.refs[1].bounds).toEqual({ x: 120, y: 70, width: 180, height: 56 });
 
     const childBuild = childCalls.find((call) => call.includes("buildHighlightOverlay"));
     expect(childBuild).toBeDefined();
@@ -1327,9 +1412,9 @@ describe("BrowserPage.observe", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
-    expect(result.state.refs.map((r) => r.ref)).toEqual([1, 2]);
+    expect(result.state.refs.map((r) => r.ref)).toEqual([1]);
     expect(result.state.refs[0].bounds).toEqual({ x: 8, y: 8, width: 90, height: 28 });
-    expect(result.state.refs[1].bounds).toBeNull();
+    expect(result.state.dom).not.toContain("Child action");
   });
 
   test("installs and removes the per-frame overlay inside the owning frame", async () => {

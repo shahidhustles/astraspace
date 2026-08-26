@@ -25,6 +25,7 @@ import {
   locatorSegments,
   measureViewport,
   rectOf,
+  sensitiveName,
   SHADOW_ROOT_NODE,
   TEXT_NODE,
   visitElement,
@@ -96,6 +97,7 @@ const EXTRACT_PREAMBLE = [
   isInteractiveElement.toString(),
   isDisabled.toString(),
   isSensitiveControl.toString(),
+  sensitiveName.toString(),
   collectAttrs.toString(),
   measureViewport.toString(),
 ].join("\n");

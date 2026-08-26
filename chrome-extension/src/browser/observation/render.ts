@@ -94,7 +94,7 @@ function renderNode(
   if (node.kind === "frame") {
     lines.push(`${"  ".repeat(depth)}<frame>`);
     for (const child of node.children) {
-      renderNode(child, depth + 1, true, lines, refs, groundings);
+      renderNode(child, depth + 1, false, lines, refs, groundings);
     }
     return;
   }
@@ -102,13 +102,13 @@ function renderNode(
   if (node.kind === "shadow") {
     lines.push(`${"  ".repeat(depth)}<#shadow-root>`);
     for (const child of node.children) {
-      renderNode(child, depth + 1, true, lines, refs, groundings);
+      renderNode(child, depth + 1, false, lines, refs, groundings);
     }
     return;
   }
 
   const el = node;
-  if (el.ref !== null) {
+  if (el.ref !== null && el.viewportBounds !== null) {
     lines.push(`${"  ".repeat(depth)}${formatActionable(el)}`);
     refs.push(toObservedRef(el));
     groundings.push(toGroundingRecord(el));

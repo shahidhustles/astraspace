@@ -85,7 +85,7 @@ const EXPECTED_DOM = `<document>
     <label>Name
     [1]<input role=textbox type=text name=name value=Alice>Name />
     <label>Password
-    [2]<input role=textbox type=password name=pass>Password />
+    [2]<input role=textbox type=password>Password />
     [3]<input role=checkbox type=checkbox name=agree checked>Agree />
     <label>Agree
     <label>City
@@ -343,11 +343,15 @@ describe("renderPageContent", () => {
     if (!host || !iframe || !shadowButton) throw new Error("boundary fixtures missing");
     host.attachShadow({ mode: "open" });
     host.shadowRoot!.appendChild(shadowButton);
+    host.shadowRoot!.prepend(win.document.createTextNode("Shadow plain text"));
     Object.defineProperty(host, "getBoundingClientRect", {
       value: () => ({ x: 8, y: 8, width: 300, height: 60 }),
     });
     Object.defineProperty(shadowButton, "getBoundingClientRect", {
       value: () => ({ x: 8, y: 16, width: 120, height: 20 }),
+    });
+    Object.defineProperty(iframe, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 80, width: 300, height: 60 }),
     });
 
     let body: Node | null = iframe;
@@ -364,6 +368,7 @@ describe("renderPageContent", () => {
     const frameNode = content.root.children.find((node) => node.kind === "frame");
     if (!frameNode || frameNode.kind !== "frame") throw new Error("frame placeholder missing");
     frameNode.children = [
+      { kind: "text", text: "Frame plain text" },
       {
         kind: "element",
         tag: "button",
@@ -388,6 +393,8 @@ describe("renderPageContent", () => {
     ];
 
     const { dom, refs, groundings } = renderPageContent(content);
+    expect(dom).toContain("Shadow plain text");
+    expect(dom).toContain("Frame plain text");
 
     expect(dom).toContain("<#shadow-root>");
     expect(dom).toContain("[1]<button>Shadow action />");

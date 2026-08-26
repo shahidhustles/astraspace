@@ -31,7 +31,6 @@ import {
   type ViewportMeasurements,
 } from "./observation";
 import type { OwnerMap } from "./observation/extract";
-import { rectOf } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
@@ -80,6 +79,12 @@ interface ExtractedFrameTreeResult {
   content: ExtractedPageContent;
   nextRef: number;
   overlays: FrameOverlay[];
+}
+
+interface FrameOwnerGeometry {
+  contentRect: RectBounds;
+  scaleX: number;
+  scaleY: number;
 }
 
 export class BrowserPage {
@@ -387,7 +392,6 @@ export class BrowserPage {
       page.mainFrame(),
       binding.frameIds,
       frameById,
-      page,
       1,
     );
     if (!result) {
@@ -459,7 +463,6 @@ async function extractFrameRecursive(
   frame: Frame,
   frameIds: Map<Frame, string>,
   frameById: Map<string, Frame>,
-  page: Page,
   startRef: number,
 ): Promise<ExtractedFrameTreeResult | null> {
   const owners: OwnerMap = {};
@@ -507,7 +510,7 @@ async function extractFrameRecursive(
         return null;
       }
       control.backendNodeId = await element.backendNodeId();
-      return await page.accessibility.snapshot({ root: element, interestingOnly: false });
+      return await frame.accessibility.snapshot({ root: element, interestingOnly: false });
     } finally {
       await handle.dispose();
     }
@@ -534,25 +537,28 @@ async function extractFrameRecursive(
       childFrame,
       frameIds,
       frameById,
-      page,
       nextRef,
     );
     if (!childResult) {
       return null;
     }
 
-    let ownerRect: RectBounds | null = null;
     const owner = await childFrame.frameElement();
-    if (owner) {
-      try {
-        ownerRect = await owner.evaluate(rectOf);
-      } catch {
-        ownerRect = null;
-      } finally {
-        await owner.dispose();
-      }
+    if (!owner) {
+      return null;
     }
-    translateToParentViewport(childResult.content.root, ownerRect, content.viewport);
+    let ownerGeometry: FrameOwnerGeometry | null;
+    try {
+      ownerGeometry = await owner.evaluate(measureFrameOwner);
+    } catch {
+      return null;
+    } finally {
+      await owner.dispose();
+    }
+    if (!ownerGeometry) {
+      return null;
+    }
+    translateToParentViewport(childResult.content.root, ownerGeometry, content.viewport);
 
     placeholder.children = childResult.content.root.children;
     nextRef = childResult.nextRef;
@@ -564,19 +570,19 @@ async function extractFrameRecursive(
 
 function translateToParentViewport(
   root: ExtractedNode,
-  ownerRect: RectBounds | null,
+  ownerGeometry: FrameOwnerGeometry,
   parentViewport: ViewportMeasurements,
 ): void {
-  const visibleOwner =
-    ownerRect === null
-      ? null
-      : clipToRect(ownerRect, { x: 0, y: 0, width: parentViewport.width, height: parentViewport.height });
+  const visibleOwner = clipToRect(
+    ownerGeometry.contentRect,
+    { x: 0, y: 0, width: parentViewport.width, height: parentViewport.height },
+  );
   const walk = (node: ExtractedNode): void => {
     if (node.kind === "element") {
       if (node.ref !== null) {
         node.viewportBounds = translateBounds(
           node.viewportBounds === undefined ? node.bounds : node.viewportBounds,
-          ownerRect,
+          ownerGeometry,
           visibleOwner,
         );
       }
@@ -596,21 +602,46 @@ function translateToParentViewport(
 
 function translateBounds(
   bounds: RectBounds | null,
-  ownerRect: RectBounds | null,
+  ownerGeometry: FrameOwnerGeometry,
   visibleOwner: RectBounds | null,
 ): RectBounds | null {
-  if (bounds === null || ownerRect === null || visibleOwner === null) {
+  if (bounds === null || visibleOwner === null) {
     return null;
   }
   return clipToRect(
     {
-      x: bounds.x + ownerRect.x,
-      y: bounds.y + ownerRect.y,
-      width: bounds.width,
-      height: bounds.height,
+      x: Math.round(ownerGeometry.contentRect.x + bounds.x * ownerGeometry.scaleX),
+      y: Math.round(ownerGeometry.contentRect.y + bounds.y * ownerGeometry.scaleY),
+      width: Math.round(bounds.width * ownerGeometry.scaleX),
+      height: Math.round(bounds.height * ownerGeometry.scaleY),
     },
     visibleOwner,
   );
+}
+
+function measureFrameOwner(element: HTMLIFrameElement): FrameOwnerGeometry | null {
+  const rect = element.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) {
+    return null;
+  }
+  const layoutWidth = element.offsetWidth > 0 ? element.offsetWidth : rect.width;
+  const layoutHeight = element.offsetHeight > 0 ? element.offsetHeight : rect.height;
+  const scaleX = rect.width / layoutWidth;
+  const scaleY = rect.height / layoutHeight;
+  const clientWidth = element.clientWidth > 0 ? element.clientWidth : layoutWidth;
+  const clientHeight = element.clientHeight > 0 ? element.clientHeight : layoutHeight;
+  const contentX = rect.x + element.clientLeft * scaleX;
+  const contentY = rect.y + element.clientTop * scaleY;
+  return {
+    contentRect: {
+      x: Math.round(contentX),
+      y: Math.round(contentY),
+      width: Math.round(clientWidth * scaleX),
+      height: Math.round(clientHeight * scaleY),
+    },
+    scaleX,
+    scaleY,
+  };
 }
 
 function assignMainViewportBounds(root: ExtractedNode, viewport: ViewportMeasurements): void {

@@ -82,6 +82,7 @@ const LAYOUT: Record<string, RectBounds> = {
   "img-button": { x: 8, y: 420, width: 100, height: 28 },
   "aria-check": { x: 8, y: 460, width: 120, height: 20 },
   "aria-labelledby": { x: 8, y: 492, width: 120, height: 20 },
+  frame: { x: 8, y: 530, width: 300, height: 60 },
 };
 
 function fixtureWindow(): Window {
@@ -207,7 +208,7 @@ describe("extractPageContent", () => {
     expect(pass.tag).toBe("input");
     expect(pass.role).toBe("textbox");
     expect(pass.name).toBe("Password");
-    expect(pass.attrs).toMatchObject({ type: "password", name: "pass" });
+    expect(pass.attrs).toEqual({ type: "password" });
     expect(pass.attrs.value).toBeUndefined();
 
     const agree = controlAtY(content, 168);
@@ -407,6 +408,12 @@ describe("extractPageContent", () => {
     expect(frame?.kind).toBe("frame");
     if (frame?.kind !== "frame") return;
     expect(frame.frameId).toBe("frame-1");
+
+    const iframe = win.document.getElementById("frame");
+    if (!iframe) throw new Error("frame fixture missing");
+    iframe.setAttribute("hidden", "");
+    const hidden = extractPageContent(win, 1, { [JSON.stringify(placeholderFramePath(win))]: "frame-1" });
+    expect(hidden.root.children.some((node) => node.kind === "frame")).toBe(false);
   });
 
   test("traverses open shadow roots and keeps closed shadow content opaque", () => {
@@ -478,6 +485,16 @@ describe("extractPageContent", () => {
     expect(json).toContain("Closed wrapper");
     expect(json).not.toContain("Closed shadow button");
     expect(closedContent.controls.some((control) => control.name === "Closed shadow button")).toBe(false);
+
+    const focusableClosedHost = win.document.createElement("secret-field");
+    focusableClosedHost.setAttribute("tabindex", "0");
+    focusableClosedHost.attachShadow({ mode: "closed" }).innerHTML = "<button>Secret action</button>";
+    win.document.body.appendChild(focusableClosedHost);
+    Object.defineProperty(focusableClosedHost, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 130, width: 200, height: 40 }),
+    });
+    const opaqueContent = extractPageContent(win);
+    expect(opaqueContent.controls.some((control) => control.tag === "secret-field")).toBe(false);
   });
 
   test("threads ref allocation across frame extractors through startRef", () => {
@@ -547,7 +564,8 @@ describe("extractPageContent", () => {
     });
     win.document.body.innerHTML = `
       <div id="secret-holder">
-        <input id="otp" name="api_token" autocomplete="one-time-code" value="654321">
+        <input id="otp" name="api_token" autocomplete="one-time-code" value="654321"
+          placeholder="4111 1111 1111 1111" aria-label="Code 654321">
       </div>
     `;
     const otp = win.document.getElementById("otp");
@@ -566,8 +584,12 @@ describe("extractPageContent", () => {
     expect(control.cssSegments.join(" ")).not.toContain("api_token");
     expect(control.xpathSegments.join(" ")).not.toContain("api_token");
     expect(control.attrs.value).toBeUndefined();
+    expect(control.attrs.placeholder).toBeUndefined();
+    expect(control.attrs["aria-label"]).toBeUndefined();
+    expect(control.name).toBeNull();
     const json = JSON.stringify(content);
     expect(json).not.toContain("654321");
+    expect(json).not.toContain("4111 1111 1111 1111");
   });
 });
 
