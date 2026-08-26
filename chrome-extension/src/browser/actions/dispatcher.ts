@@ -56,14 +56,12 @@ export async function dispatchBrowserAction(
           "browser_type",
           request.input.target,
           () => runtime.type(request.input.target, request.input.text),
-          runtime,
         );
       case "browser_clear_input":
         return await mutatingTargetAction(
           "browser_clear_input",
           request.input,
           () => runtime.clearInput(request.input),
-          runtime,
         );
       case "browser_keypress":
         return await keypressAction(request.input, runtime);
@@ -123,7 +121,7 @@ async function navigationAction(
 async function clickAction(target: GroundedTarget, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
   const result = await runtime.click(target);
   if (!result.ok) {
-    return { ok: false, action: "browser_click", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action: "browser_click", tabId: target.tabId, error: result.error };
   }
   return {
     ok: true,
@@ -139,11 +137,10 @@ async function mutatingTargetAction(
   action: "browser_type" | "browser_clear_input",
   target: GroundedTarget,
   run: () => Promise<TypeResult | ClearInputResult>,
-  runtime: BrowserActionRuntime,
 ): Promise<BrowserActionResult> {
   const result = await run();
   if (!result.ok) {
-    return { ok: false, action, tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action, tabId: target.tabId, error: result.error };
   }
   return {
     ok: true,
@@ -167,7 +164,7 @@ async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntim
   }
   const result = await runtime.keypress(input);
   if (!result.ok) {
-    return { ok: false, action: "browser_keypress", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action: "browser_keypress", tabId, error: result.error };
   }
   return {
     ok: true,
@@ -191,7 +188,7 @@ async function scrollAction(input: ScrollInput, runtime: BrowserActionRuntime): 
   }
   const result = await runtime.scroll(input);
   if (!result.ok) {
-    return { ok: false, action: "browser_scroll", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action: "browser_scroll", tabId, error: result.error };
   }
   return {
     ok: true,
@@ -236,7 +233,7 @@ async function selectOptionsAction(
 ): Promise<BrowserActionResult> {
   const result = await runtime.getSelectOptions(target);
   if (!result.ok) {
-    return { ok: false, action: "browser_get_select_options", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action: "browser_get_select_options", tabId: target.tabId, error: result.error };
   }
   return {
     ok: true,
@@ -244,7 +241,11 @@ async function selectOptionsAction(
     tabId: target.tabId,
     url: result.url,
     snapshotInvalidated: false,
-    data: { kind: "get_select_options", options: result.options },
+    data: {
+      kind: "get_select_options",
+      options: result.options,
+      optionsTruncated: result.optionsTruncated,
+    },
   };
 }
 
@@ -255,7 +256,7 @@ async function selectOptionAction(
   const identity: SelectOptionIdentity = { index: input.index, label: input.label, value: input.value };
   const result = await runtime.selectOption(input.target, identity);
   if (!result.ok) {
-    return { ok: false, action: "browser_select_option", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action: "browser_select_option", tabId: input.target.tabId, error: result.error };
   }
   return {
     ok: true,
@@ -278,11 +279,14 @@ async function tabLifecycleAction(
     return { ok: false, action, tabId: runtime.selectedTabId, error: result.error };
   }
   const tabs = await listedTabs(runtime);
-  const url = tabs?.find((tab) => tab.tabId === result.tabId)?.url ?? urlFallback;
+  const selectedTab = tabs?.find((tab) => tab.selected);
+  const reportedTab = action === "browser_close_tab" && selectedTab ? selectedTab : undefined;
+  const tabId = reportedTab?.tabId ?? result.tabId;
+  const url = reportedTab?.url ?? tabs?.find((tab) => tab.tabId === result.tabId)?.url ?? urlFallback;
   return {
     ok: true,
     action,
-    tabId: result.tabId,
+    tabId,
     url,
     snapshotInvalidated: true,
     data: tabActionData(action, tabs),

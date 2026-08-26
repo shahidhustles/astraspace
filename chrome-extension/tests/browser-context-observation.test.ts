@@ -174,6 +174,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/", evaluateErr
     screenshotGate: null,
     url: () => page.currentUrl,
     createCDPSession: async () => new FakeSession(),
+    _client: () => new FakeSession(),
     mainFrame: () => mainFrame,
     evaluate: async (expression: string): Promise<unknown> => mainFrame.evaluate(expression),
     title: async () => "Context fixture",

@@ -15,6 +15,11 @@ export default defineConfig({
     },
   },
   build: {
+    // Observation page programs (src/browser/observation/index.ts) assemble injected
+    // expressions from Function.prototype.toString(). Minifier identifier renaming
+    // breaks the hand-written names in those generated sources, so this build skips
+    // minification. Revisit together with any change to that reflection contract.
+    minify: false,
     rollupOptions: {
       external: (id, importer) =>
         id === "@puppeteer/browsers" ||

@@ -53,6 +53,7 @@ function snapshot(record: InternalFrameRecord): FrameRecord {
 export class FrameGraphTracker {
   private disposed = false;
   private readonly session: CDPSession;
+  private readonly detachOnDispose: boolean;
   private readonly onChange: (() => void) | undefined;
   private readonly records = new Map<string, InternalFrameRecord>();
   private rootFrameId: string;
@@ -62,8 +63,9 @@ export class FrameGraphTracker {
   private readonly onFrameNavigated: (event: Protocol.Page.FrameNavigatedEvent) => void;
   private readonly onNavigatedWithinDocument: (event: Protocol.Page.NavigatedWithinDocumentEvent) => void;
 
-  private constructor(session: CDPSession, mainFrameId: string, onChange?: () => void) {
+  private constructor(session: CDPSession, mainFrameId: string, onChange?: () => void, detachOnDispose = true) {
     this.session = session;
+    this.detachOnDispose = detachOnDispose;
     this.rootFrameId = mainFrameId;
     this.onChange = onChange;
     this.onFrameAttached = (event) => {
@@ -189,10 +191,19 @@ export class FrameGraphTracker {
     session.on("Page.navigatedWithinDocument", this.onNavigatedWithinDocument);
   }
 
-  static async create(session: CDPSession, onChange?: () => void): Promise<FrameGraphTracker> {
+  static async create(
+    session: CDPSession,
+    onChange?: () => void,
+    options: { detachOnDispose?: boolean } = {},
+  ): Promise<FrameGraphTracker> {
     await session.send("Page.enable");
     const { frameTree } = await session.send("Page.getFrameTree");
-    const tracker = new FrameGraphTracker(session, frameTree.frame.id, onChange);
+    const tracker = new FrameGraphTracker(
+      session,
+      frameTree.frame.id,
+      onChange,
+      options.detachOnDispose ?? true,
+    );
     tracker.ingestFrameTree(frameTree);
     return tracker;
   }
@@ -258,7 +269,7 @@ export class FrameGraphTracker {
     this.session.off("Page.frameDetached", this.onFrameDetached);
     this.session.off("Page.frameNavigated", this.onFrameNavigated);
     this.session.off("Page.navigatedWithinDocument", this.onNavigatedWithinDocument);
-    if (!this.session.detached) {
+    if (this.detachOnDispose && !this.session.detached) {
       void this.session.detach().catch(() => {});
     }
   }

@@ -231,54 +231,73 @@ function scrollElementIntoView(el: Element): ScrollPosition {
 }
 
 function findTextOccurrencePaths(query: string): PathStep[][] {
-  const needle = query.toLowerCase();
+  const needle = query.replace(/\s+/g, " ").trim().toLowerCase();
   const ignoredTags = new Set(["script", "style", "template", "noscript", "svg"]);
   const isVisibleElement = (el: Element): boolean => {
     if (typeof el.checkVisibility === "function") {
-      return el.checkVisibility();
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+        return false;
+      }
     }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 || rect.height > 0;
+    let current: Element | null = el;
+    while (current) {
+      const style = getComputedStyle(current);
+      if (
+        current.hasAttribute("hidden") ||
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse" ||
+        Number.parseFloat(style.opacity) === 0
+      ) {
+        return false;
+      }
+      const root = current.getRootNode();
+      current = current.parentElement ?? (root instanceof ShadowRoot ? root.host : null);
+    }
+    return true;
+  };
+  const visibleText = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.textContent ?? "";
+    }
+    if (!(node instanceof Element) || ignoredTags.has(node.tagName.toLowerCase()) || !isVisibleElement(node)) {
+      return "";
+    }
+    const parts = Array.from(node.childNodes).map(visibleText);
+    if (node.shadowRoot) {
+      parts.push(...Array.from(node.shadowRoot.childNodes).map(visibleText));
+    }
+    return parts.join(" ");
   };
   const paths: PathStep[][] = [];
-  const walk = (node: Node, path: PathStep[]): void => {
-    if (node.nodeType === 3) {
-      const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (text.length > 0 && text.toLowerCase().includes(needle)) {
-        const parent = node.parentElement;
-        if (parent && isVisibleElement(parent)) {
-          paths.push(path);
-        }
-      }
-      return;
+  const walk = (el: Element, path: PathStep[]): boolean => {
+    if (ignoredTags.has(el.tagName.toLowerCase()) || !isVisibleElement(el)) {
+      return false;
     }
-    if (node.nodeType !== 1) {
-      return;
-    }
-    const el = node as Element;
-    if (ignoredTags.has(el.tagName.toLowerCase())) {
-      return;
-    }
+    let descendantContains = false;
     const children = Array.from(el.childNodes);
     for (let index = 0; index < children.length; index++) {
       const child = children[index];
-      if (child.nodeType === 3) {
-        walk(child, path);
-      } else {
-        walk(child, [...path, { kind: "child", index }]);
+      if (child instanceof Element) {
+        descendantContains = walk(child, [...path, { kind: "child", index }]) || descendantContains;
       }
     }
     if (el.shadowRoot) {
       const shadowChildren = Array.from(el.shadowRoot.childNodes);
       for (let index = 0; index < shadowChildren.length; index++) {
         const child = shadowChildren[index];
-        if (child.nodeType === 3) {
-          walk(child, [...path, { kind: "shadow" }]);
-        } else {
-          walk(child, [...path, { kind: "shadow" }, { kind: "child", index }]);
+        if (child instanceof Element) {
+          descendantContains =
+            walk(child, [...path, { kind: "shadow" }, { kind: "child", index }]) ||
+            descendantContains;
         }
       }
     }
+    const contains = visibleText(el).replace(/\s+/g, " ").trim().toLowerCase().includes(needle);
+    if (contains && !descendantContains) {
+      paths.push(path);
+    }
+    return contains;
   };
   walk(document.body, []);
   return paths;

@@ -485,6 +485,33 @@ describe("browser action catalog through the runtime boundary", () => {
   );
 
   test(
+    "scroll_to_text follows rendered text across markup and excludes hidden text",
+    async () => {
+      await freshPage();
+
+      for (const text of ["Split marker phrase", "Direct shadow marker text"]) {
+        const result = await handleBrowserRuntimeMessage(
+          { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: { text } },
+          runtime,
+        );
+        expect(result.ok).toBe(true);
+      }
+
+      for (const text of ["Invisible opacity marker", "Invisible visibility marker"]) {
+        const result = await handleBrowserRuntimeMessage(
+          { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: { text } },
+          runtime,
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe("text_not_found");
+        }
+      }
+    },
+    30_000,
+  );
+
+  test(
     "every remaining page and element family runs through the runtime boundary",
     async () => {
       await freshPage();

@@ -62,6 +62,7 @@ function fakePage(currentUrl = "https://example.com"): FakePage {
     goBackError: null,
     reloadError: null,
     session,
+    _client: () => session,
     createCDPSession: async () => session,
     goto: async (url: string, options?: unknown) => {
       page.gotoCalls += 1;
@@ -161,6 +162,19 @@ describe("BrowserPage", () => {
     expect(browser.pagesCalls).toBe(1);
     expect(page.attached).toBe(true);
     expect(page.page).not.toBeNull();
+  });
+
+  test("attach reuses the page session without requesting a forbidden nested CDP session", async () => {
+    const { deps, page: connectedPage } = fakeDeps();
+    connectedPage.createCDPSession = async () => {
+      throw new Error("Not allowed");
+    };
+    const page = new BrowserPage(7, "https://example.com", deps);
+
+    const result = await page.attach();
+
+    expect(result).toEqual({ ok: true, tabId: 7 });
+    expect(page.attached).toBe(true);
   });
 
   test("attach passes the cdp transport options without a default viewport", async () => {
@@ -278,7 +292,7 @@ describe("BrowserPage", () => {
     expect(page.page).toBeNull();
   });
 
-  test("disconnect disposes the identity tracker session with the connection", async () => {
+  test("disconnect leaves the borrowed page session for Browser.disconnect to close", async () => {
     const { deps, page } = fakeDeps();
     const wrapper = new BrowserPage(7, "https://example.com", deps);
     await wrapper.attach();
@@ -286,7 +300,7 @@ describe("BrowserPage", () => {
 
     await wrapper.disconnect();
 
-    expect(page.session.detached).toBe(true);
+    expect(page.session.detached).toBe(false);
   });
 
   test("disconnect without an attach is a no-op", async () => {

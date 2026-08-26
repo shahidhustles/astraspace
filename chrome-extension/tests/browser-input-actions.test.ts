@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { clearGroundedTarget, isEditableControl, isReadOnly, typeGroundedTarget, type InputDeps } from "../src/browser/actions/input";
+import {
+  clearEditableControl,
+  clearGroundedTarget,
+  isEditableControl,
+  isReadOnly,
+  typeGroundedTarget,
+  type InputDeps,
+} from "../src/browser/actions/input";
 import { BROWSER_ACTION_MESSAGE } from "../src/browser/actions/types";
 import { isDisabled } from "../src/browser/observation/extract";
 import { handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
@@ -496,5 +504,50 @@ describe("clearGroundedTarget", () => {
       error: { code: "action_failed", message: "Element interaction failed" },
     });
     expect(calls.dispose).toBe(true);
+  });
+});
+
+describe("clearEditableControl", () => {
+  test("bypasses an instance value tracker so controlled inputs observe the clear", () => {
+    const window = new Window();
+    const input = window.document.createElement("input");
+    input.value = "before";
+    const descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+    if (!descriptor?.get || !descriptor.set) {
+      throw new Error("input value descriptor is unavailable");
+    }
+
+    let trackedValue = input.value;
+    let observedValue: string | null = null;
+    Object.defineProperty(input, "value", {
+      configurable: true,
+      get: () => descriptor.get?.call(input),
+      set: (value: string) => {
+        trackedValue = value;
+        descriptor.set?.call(input, value);
+      },
+    });
+    input.addEventListener("input", () => {
+      if (trackedValue !== input.value) {
+        observedValue = input.value;
+      }
+      trackedValue = input.value;
+    });
+
+    clearEditableControl(input as unknown as Element);
+
+    expect(input.value).toBe("");
+    expect(observedValue).toBe("");
+  });
+
+  test("treats ARIA read-only editable controls as read-only", () => {
+    const window = new Window();
+    window.document.body.innerHTML = `<div role="textbox" contenteditable="true" aria-readonly="true">locked</div>`;
+    const control = window.document.querySelector("[role=textbox]");
+    if (!control) {
+      throw new Error("fixture control is missing");
+    }
+
+    expect(isReadOnly(control as unknown as Element)).toBe(true);
   });
 });

@@ -144,31 +144,52 @@ export class BrowserContext {
       return { ok: false, error: policy.error };
     }
 
+    let createdTabId: number | null = null;
+    const earlyUpdates = new Map<number, chrome.tabs.Tab>();
+    const handle = this.waitFor<{ tabId: number; tab: chrome.tabs.Tab }>(
+      (cb) => {
+        return this.deps.onUpdated((tabId, _changeInfo, tab) => {
+          if (createdTabId === null) {
+            earlyUpdates.set(tabId, tab);
+            return;
+          }
+          cb({ tabId, tab });
+        });
+      },
+      (value) =>
+        value.tabId === createdTabId &&
+        value.tab.url !== undefined &&
+        enforceUrlPolicy(value.tab.url).ok,
+    );
+
     let created: chrome.tabs.Tab;
     try {
       created = await this.deps.createTab(url);
     } catch {
+      handle.cancel();
       return { ok: false, error: { code: "chrome_api_error", message: "Could not create tab" } };
     }
     if (created.id === undefined || created.url === undefined) {
+      handle.cancel();
       return { ok: false, error: { code: "chrome_api_error", message: "Created tab has no id or URL" } };
     }
+    createdTabId = created.id;
 
     const createdPolicy = enforceUrlPolicy(created.url);
     if (createdPolicy.ok) {
+      handle.cancel();
       return this.attachTab(created.id, createdPolicy.url);
     }
 
     let reached: chrome.tabs.Tab;
     try {
-      const handle = this.waitFor<{ tabId: number; tab: chrome.tabs.Tab }>(
-        (cb) => this.deps.onUpdated((tabId, _changeInfo, tab) => cb({ tabId, tab })),
-        (value) =>
-          value.tabId === created.id &&
-          value.tab.url !== undefined &&
-          enforceUrlPolicy(value.tab.url).ok,
-      );
-      reached = (await handle.promise).tab;
+      const earlyUpdate = earlyUpdates.get(created.id);
+      if (earlyUpdate?.url !== undefined && enforceUrlPolicy(earlyUpdate.url).ok) {
+        handle.cancel();
+        reached = earlyUpdate;
+      } else {
+        reached = (await handle.promise).tab;
+      }
     } catch {
       return { ok: false, error: { code: "lifecycle_timeout", message: "Tab did not reach a controllable URL" } };
     }
@@ -198,10 +219,14 @@ export class BrowserContext {
       return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
     }
 
-    try {
-      await handle.promise;
-    } catch {
-      return { ok: false, error: { code: "lifecycle_timeout", message: "Tab did not activate" } };
+    if (tab.active) {
+      handle.cancel();
+    } else {
+      try {
+        await handle.promise;
+      } catch {
+        return { ok: false, error: { code: "lifecycle_timeout", message: "Tab did not activate" } };
+      }
     }
 
     const existing = this.pages.get(tabId);
@@ -477,8 +502,23 @@ export class BrowserContext {
     }
 
     this.deps.diagnostics({ type: "attach_started", tabId: page.tabId });
-    const attempt = page
-      .attach()
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const pageAttempt = page.attach().catch(
+      (): AttachResult => ({ ok: false, error: { code: "attach_failed", message: "Failed to attach to tab" } }),
+    );
+    const timeout = new Promise<AttachResult>((resolve) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        resolve({ ok: false, error: { code: "lifecycle_timeout", message: "Tab attachment timed out" } });
+      }, this.deps.timeoutMs);
+    });
+    void pageAttempt.then((result) => {
+      if (timedOut && result.ok) {
+        return page.disconnect();
+      }
+    });
+    const attempt = Promise.race([pageAttempt, timeout])
       .then((result) => {
         if (result.ok) {
           this.selectedTab = page.tabId;
@@ -489,6 +529,9 @@ export class BrowserContext {
         return result;
       })
       .finally(() => {
+        if (timer) {
+          clearTimeout(timer);
+        }
         this.pending.delete(page.tabId);
       });
     this.pending.set(page.tabId, attempt);

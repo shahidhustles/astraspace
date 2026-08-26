@@ -215,6 +215,9 @@ function parseGroundedTarget(
   if (typeof input.tabId !== "number" || !Number.isInteger(input.tabId)) {
     return { ok: false, message: `${action} requires an integer tabId` };
   }
+  if (input.tabId < 0) {
+    return { ok: false, message: `${action} requires a non-negative tabId` };
+  }
   if (typeof input.snapshotId !== "string" || input.snapshotId.length === 0) {
     return { ok: false, message: `${action} requires a string snapshotId` };
   }
@@ -240,8 +243,8 @@ function parseKeypressInput(
   if (!hasOnlyKeys(input, ["key", "modifiers", "target"])) {
     return { ok: false, message: "browser_keypress input has unknown fields" };
   }
-  if (typeof input.key !== "string" || input.key.length === 0) {
-    return { ok: false, message: "browser_keypress requires a non-empty string key" };
+  if (typeof input.key !== "string" || !isSupportedKey(input.key)) {
+    return { ok: false, message: "browser_keypress requires one supported key" };
   }
   const modifiers = parseKeypressModifiers(input.modifiers);
   if (!modifiers.ok) {
@@ -416,6 +419,9 @@ function parseTabId(
   if (typeof input.tabId !== "number" || !Number.isInteger(input.tabId)) {
     return { ok: false, message: `${action} requires an integer tabId` };
   }
+  if (input.tabId < 0) {
+    return { ok: false, message: `${action} requires a non-negative tabId` };
+  }
   return { ok: true, tabId: input.tabId };
 }
 
@@ -429,4 +435,42 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOnlyKeys(record: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(record).every((key) => allowed.includes(key));
+}
+
+const SUPPORTED_NAMED_KEYS = new Set([
+  "alt",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "arrowup",
+  "backspace",
+  "control",
+  "ctrl",
+  "del",
+  "delete",
+  "down",
+  "end",
+  "enter",
+  "esc",
+  "escape",
+  "home",
+  "insert",
+  "left",
+  "meta",
+  "pagedown",
+  "pageup",
+  "return",
+  "right",
+  "shift",
+  "space",
+  "tab",
+  "up",
+]);
+
+function isSupportedKey(key: string): boolean {
+  if (key.length === 1) {
+    return true;
+  }
+  const normalized = key.trim().toLowerCase();
+  return SUPPORTED_NAMED_KEYS.has(normalized) || /^f(?:[1-9]|1[0-2])$/.test(normalized);
 }

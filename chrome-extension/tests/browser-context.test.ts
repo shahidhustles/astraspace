@@ -50,6 +50,7 @@ function fakePage(): FakePage {
     currentUrl: "https://example.com",
     gotoError: null,
     createCDPSession: async () => new FakeSession(),
+    _client: () => new FakeSession(),
     goto: async () => {
       page.gotoCalls += 1;
       if (page.gotoError) {
@@ -365,6 +366,23 @@ describe("BrowserContext", () => {
     expect(events.map((event) => event.type)).toEqual(["attach_started", "attach_failed", "attach_started", "attach_ok"]);
   });
 
+  test("bounds a stalled tab attachment and leaves no selected connection", async () => {
+    const { context, events } = setup({
+      tabs: activeTab(),
+      timeoutMs: 10,
+      connectTab: () => new Promise(() => {}),
+    });
+
+    const result = await context.useActiveTab();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "lifecycle_timeout", message: "Tab attachment timed out" },
+    });
+    expect(context.selectedTabId).toBeNull();
+    expect(events).toContainEqual({ type: "attach_failed", tabId: 7, code: "lifecycle_timeout" });
+  });
+
   test("diagnostics never record page content or URL credentials", async () => {
     const { context, events } = setup({ tabs: activeTab({ url: "https://user:secret@example.com/path" }) });
 
@@ -422,6 +440,23 @@ describe("BrowserContext", () => {
 
     expect(result).toEqual({ ok: true, tabId: 42 });
     expect(connectTabCalls()).toBe(1);
+  });
+
+  test("openTab catches a controllable URL emitted before tab creation resolves", async () => {
+    let emitUpdated = (): void => {};
+    const { context, api } = setup({
+      createTab: async () => {
+        emitUpdated();
+        return { id: 42, url: "about:blank" } as chrome.tabs.Tab;
+      },
+      timeoutMs: 20,
+    });
+    emitUpdated = () => api.emitUpdated({ id: 42, url: "https://example.com/ready" } as chrome.tabs.Tab);
+
+    const result = await context.openTab("https://example.com/ready");
+
+    expect(result).toEqual({ ok: true, tabId: 42 });
+    expect(api.updatedListenerCount()).toBe(0);
   });
 
   test("openTab rejects a blocked URL without creating a tab", async () => {
@@ -486,6 +521,20 @@ describe("BrowserContext", () => {
     expect(await pending).toEqual({ ok: true, tabId: 7 });
     expect(connectTabCalls()).toBe(1);
     expect(events).toEqual([{ type: "attach_reused", tabId: 7 }]);
+  });
+
+  test("switchTab succeeds when Chrome reports the tab is already active", async () => {
+    const { context, api } = setup({
+      tabs: activeTab(),
+      updateTab: async (tabId) => ({ id: tabId, active: true, url: "https://example.com" }) as chrome.tabs.Tab,
+      timeoutMs: 20,
+    });
+    await context.useActiveTab();
+
+    const result = await context.switchTab(7);
+
+    expect(result).toEqual({ ok: true, tabId: 7 });
+    expect(api.activatedListenerCount()).toBe(0);
   });
 
   test("switchTab attaches a registered tab whose earlier attach failed", async () => {

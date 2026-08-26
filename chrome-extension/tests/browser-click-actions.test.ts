@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { clickGroundedTarget, type ClickDeps } from "../src/browser/actions/element";
+import { clickGroundedTarget, isHitTestTarget, type ClickDeps } from "../src/browser/actions/element";
 import { BROWSER_ACTION_MESSAGE } from "../src/browser/actions/types";
 import { isDisabled } from "../src/browser/observation/extract";
 import { handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
@@ -94,6 +95,21 @@ describe("browser_click dispatch", () => {
     }
   });
 
+  test("attributes a grounded failure to the requested tab", async () => {
+    const target = { ...TARGET, tabId: 41 };
+    const runtime = fakeRuntime({
+      selectedTabId: 7,
+      click: async () => ({ ok: false, error: { code: "stale_ref", message: "stale", target } }),
+    });
+
+    const result = await handleBrowserRuntimeMessage(
+      { type: BROWSER_ACTION_MESSAGE, action: "browser_click", input: target },
+      runtime,
+    );
+
+    expect(result).toMatchObject({ ok: false, action: "browser_click", tabId: 41 });
+  });
+
   test("preserves interaction failures with their specific code", async () => {
     const cases = [
       { code: "disabled_target", message: "Element is disabled" },
@@ -163,6 +179,19 @@ describe("browser_click dispatch", () => {
   });
 });
 
+describe("disabled interaction state", () => {
+  test("includes native fieldset and ARIA-disabled ancestor state", () => {
+    const window = new Window();
+    window.document.body.innerHTML = `
+      <fieldset disabled><input id="native" /></fieldset>
+      <div aria-disabled="true"><button id="aria">Blocked</button></div>
+    `;
+
+    expect(isDisabled(window.document.querySelector("#native") as unknown as Element)).toBe(true);
+    expect(isDisabled(window.document.querySelector("#aria") as unknown as Element)).toBe(true);
+  });
+});
+
 describe("clickGroundedTarget", () => {
   interface FakeHandleCalls {
     evaluate: boolean;
@@ -172,6 +201,7 @@ describe("clickGroundedTarget", () => {
     dispose: boolean;
     fileInput: boolean;
     disabled: boolean;
+    hitTest: boolean;
   }
 
   function fakeHandle(
@@ -183,6 +213,9 @@ describe("clickGroundedTarget", () => {
         calls.evaluate = true;
         if (fn === isDisabled) {
           return calls.disabled;
+        }
+        if (fn === isHitTestTarget) {
+          return calls.hitTest;
         }
         return calls.fileInput;
       },
@@ -241,6 +274,7 @@ describe("clickGroundedTarget", () => {
       dispose: false,
       fileInput: false,
       disabled: false,
+      hitTest: true,
     };
   }
 
@@ -272,7 +306,7 @@ describe("clickGroundedTarget", () => {
         ok: true,
         element: fakeHandle(calls, {
           click: async () => {
-            listeners[0]?.({ id: 42 } as chrome.tabs.Tab);
+            listeners[0]?.({ id: 42, openerTabId: TARGET.tabId } as chrome.tabs.Tab);
           },
         }),
       }),
@@ -282,6 +316,25 @@ describe("clickGroundedTarget", () => {
 
     expect(result).toEqual({ ok: true, url: "https://example.com/final", newTabId: 42 });
     expect(listeners).toHaveLength(1);
+  });
+
+  test("ignores tabs that were not opened by the clicked tab", async () => {
+    const calls = handleCalls();
+    const { listeners, deps } = fakeDeps({
+      resolveTarget: async () => ({
+        ok: true,
+        element: fakeHandle(calls, {
+          click: async () => {
+            listeners[0]?.({ id: 41, openerTabId: 99 } as chrome.tabs.Tab);
+            listeners[0]?.({ id: 42, openerTabId: TARGET.tabId } as chrome.tabs.Tab);
+          },
+        }),
+      }),
+    });
+
+    const result = await clickGroundedTarget(TARGET, deps);
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/final", newTabId: 42 });
   });
 
   test("stops the listener and disposes the handle when the click throws", async () => {
@@ -349,6 +402,23 @@ describe("clickGroundedTarget", () => {
     expect(result).toEqual({
       ok: false,
       error: { code: "file_upload_required", message: "File upload is not supported" },
+    });
+    expect(log).toEqual([]);
+    expect(calls.click).toBe(false);
+    expect(calls.dispose).toBe(true);
+  });
+
+  test("rejects a target whose click point is covered", async () => {
+    const calls = { ...handleCalls(), hitTest: false };
+    const { log, deps } = fakeDeps({
+      resolveTarget: async () => ({ ok: true, element: fakeHandle(calls) }),
+    });
+
+    const result = await clickGroundedTarget(TARGET, deps);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "not_interactable", message: "Element is covered or cannot receive pointer events" },
     });
     expect(log).toEqual([]);
     expect(calls.click).toBe(false);

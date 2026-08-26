@@ -181,16 +181,46 @@ describe("browser_switch_tab", () => {
       error: { code: "invalid_action", message: "browser_switch_tab requires an integer tabId" },
     });
   });
+
+  test("rejects Chrome's negative sentinel tab ID", async () => {
+    const result = await handleBrowserRuntimeMessage(
+      { type: BROWSER_ACTION_MESSAGE, action: "browser_switch_tab", input: { tabId: -1 } },
+      fakeRuntime(),
+    );
+
+    expect(result).toMatchObject({ ok: false, action: "browser_switch_tab", tabId: null });
+  });
 });
 
 describe("browser_close_tab", () => {
-  test("closes the requested tab and returns the remaining tab state", async () => {
+  test("closes the requested tab and returns the surviving selected tab", async () => {
     let closedId: number | null = null;
     const runtime = fakeRuntime({
       closeTab: async (tabId) => {
         closedId = tabId;
         return { ok: true, tabId };
       },
+      listTabs: async () => ({ ok: true, tabs: TABS.filter((tab) => tab.tabId !== 1) }),
+    });
+
+    const result = await handleBrowserRuntimeMessage(
+      { type: BROWSER_ACTION_MESSAGE, action: "browser_close_tab", input: { tabId: 1 } },
+      runtime,
+    );
+
+    expect(closedId).toBe(1);
+    expect(result).toEqual({
+      ok: true,
+      action: "browser_close_tab",
+      tabId: 9,
+      url: "https://opened.example",
+      snapshotInvalidated: true,
+      data: { kind: "close_tab", tabs: [TABS[1]] },
+    });
+  });
+
+  test("falls back to the closed tab identity when no selected tab is available", async () => {
+    const runtime = fakeRuntime({
       listTabs: async () => ({ ok: true, tabs: TABS.filter((tab) => tab.tabId !== 9) }),
     });
 
@@ -199,15 +229,7 @@ describe("browser_close_tab", () => {
       runtime,
     );
 
-    expect(closedId).toBe(9);
-    expect(result).toEqual({
-      ok: true,
-      action: "browser_close_tab",
-      tabId: 9,
-      url: "",
-      snapshotInvalidated: true,
-      data: { kind: "close_tab", tabs: [TABS[0]] },
-    });
+    expect(result).toMatchObject({ ok: true, tabId: 9, url: "" });
   });
 
   test("preserves missing-tab failures", async () => {

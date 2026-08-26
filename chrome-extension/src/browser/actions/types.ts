@@ -2,6 +2,10 @@ import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
 export const BROWSER_ACTION_MESSAGE = "browser.action";
 
+// Upper bound on option records returned by one browser_get_select_options call.
+// Records are always complete; identity fields are never truncated.
+export const SELECT_OPTIONS_LIMIT = 50;
+
 export type BrowserActionName =
   | "browser_navigate"
   | "browser_back"
@@ -95,7 +99,7 @@ export type BrowserActionData =
   | { kind: "keypress" }
   | { kind: "scroll"; x: number; y: number }
   | { kind: "scroll_to_text"; x: number; y: number }
-  | { kind: "get_select_options"; options: SelectOption[] }
+  | { kind: "get_select_options"; options: SelectOption[]; optionsTruncated: boolean }
   | { kind: "select_option"; selectedIndex: number }
   | { kind: "open_tab"; tabs: TabInfo[] | null }
   | { kind: "switch_tab"; tabs: TabInfo[] | null }
@@ -213,7 +217,7 @@ export type ScrollResult =
   | { ok: false; error: BrowserActionError };
 
 export type GetSelectOptionsResult =
-  | { ok: true; url: string; options: SelectOption[] }
+  | { ok: true; url: string; options: SelectOption[]; optionsTruncated: boolean }
   | { ok: false; error: BrowserActionError };
 
 export type SelectOptionResult =

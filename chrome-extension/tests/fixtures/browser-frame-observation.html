@@ -99,6 +99,9 @@
       <p>Scroll marker text</p>
       <p>Scroll marker text</p>
       <p>It&rsquo;s &ldquo;quoted&rdquo; with [data-x=&quot;y&quot;] syntax.</p>
+      <p id="split-marker">Split <strong>marker</strong> phrase</p>
+      <p style="opacity: 0">Invisible opacity marker</p>
+      <p style="visibility: hidden">Invisible visibility marker</p>
     </div>
 
     <div id="scroll-container" class="scroll-container">
@@ -146,6 +149,7 @@
       const shadowMarker = document.createElement("p");
       shadowMarker.textContent = "Shadow marker text";
       shadow.appendChild(shadowMarker);
+      shadow.appendChild(document.createTextNode("Direct shadow marker text"));
 
       const closedHost = document.getElementById("closed-host");
       const closed = closedHost.attachShadow({ mode: "closed" });

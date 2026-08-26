@@ -379,6 +379,7 @@ function fakePage(win: Window, main: FakeFrame, session: FakeSession, currentUrl
     main,
     url: () => page.currentUrl,
     createCDPSession: async () => session,
+    _client: () => session,
     mainFrame: () => main,
     goto: async () => ({}),
     title: async () => "Resolution fixture",

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ElementHandle, KeyInput } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { keypressGroundedTarget, type KeypressDeps } from "../src/browser/actions/keyboard";
+import { isFocusedElement, keypressGroundedTarget, type KeypressDeps } from "../src/browser/actions/keyboard";
 import { BROWSER_ACTION_MESSAGE } from "../src/browser/actions/types";
 import { isDisabled } from "../src/browser/observation/extract";
 import { handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
@@ -174,6 +174,7 @@ describe("browser_keypress dispatch", () => {
       { key: "a", modifiers: [] },
       { key: "a", modifiers: {}, target: { ...TARGET, ref: 0 } },
       { key: "a", modifiers: {}, extra: true },
+      { key: "ab", modifiers: { alt: false, control: false, meta: false, shift: false } },
     ];
     for (const input of badInputs) {
       const result = await handleBrowserRuntimeMessage(
@@ -205,6 +206,7 @@ describe("keypressGroundedTarget", () => {
     focus: boolean;
     dispose: boolean;
     disabled: boolean;
+    focused: boolean;
   }
 
   function fakeKeyboard(calls: FakeKeyboardCalls, overrides: Record<string, unknown> = {}) {
@@ -231,6 +233,9 @@ describe("keypressGroundedTarget", () => {
         calls.evaluate = true;
         if (fn === isDisabled) {
           return calls.disabled;
+        }
+        if (fn === isFocusedElement) {
+          return calls.focused;
         }
         return false;
       },
@@ -282,6 +287,7 @@ describe("keypressGroundedTarget", () => {
       focus: false,
       dispose: false,
       disabled: false,
+      focused: true,
     };
   }
 
@@ -293,7 +299,15 @@ describe("keypressGroundedTarget", () => {
     const { keyboardCalls, log, deps } = fakeDeps();
     deps.resolveTarget = async () => {
       log.push("resolve");
-      return { ok: true, element: fakeHandle(calls) };
+      return {
+        ok: true,
+        element: fakeHandle(calls, {
+          focus: async () => {
+            calls.focus = true;
+            log.push("focus");
+          },
+        }),
+      };
     };
 
     const result = await keypressGroundedTarget(
@@ -306,11 +320,37 @@ describe("keypressGroundedTarget", () => {
     expect(calls.isHidden).toBe(true);
     expect(calls.scrollIntoView).toBe(true);
     expect(calls.focus).toBe(true);
-    expect(log).toEqual(["resolve", "invalidate"]);
+    expect(log).toEqual(["resolve", "invalidate", "focus"]);
     expect(keyboardCalls.down).toEqual(["Alt", "Control", "Meta", "Shift"]);
     expect(keyboardCalls.press).toEqual(["a"]);
     expect(keyboardCalls.up).toEqual(["Shift", "Meta", "Control", "Alt"]);
     expect(calls.dispose).toBe(true);
+  });
+
+  test("releases only modifiers whose key-down completed", async () => {
+    const { keyboardCalls, deps } = fakeDeps({
+      keyboard: () =>
+        fakeKeyboard(keyboardCalls, {
+          down: async (key: KeyInput) => {
+            if (key === "Control") {
+              throw new Error("keyboard rejected modifier");
+            }
+            keyboardCalls.down.push(key);
+          },
+        }),
+    });
+
+    const result = await keypressGroundedTarget(
+      { key: "a", modifiers: ALL_MODIFIERS, target: TARGET },
+      deps,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "action_failed", message: "Element interaction failed" },
+    });
+    expect(keyboardCalls.down).toEqual(["Alt"]);
+    expect(keyboardCalls.up).toEqual(["Alt"]);
   });
 
   test("presses and releases only the declared modifiers", async () => {
@@ -397,7 +437,26 @@ describe("keypressGroundedTarget", () => {
       error: { code: "action_failed", message: "Element interaction failed" },
     });
     expect(keyboardCalls.down).toEqual([]);
-    expect(keyboardCalls.up).toEqual(["Shift", "Meta", "Control", "Alt"]);
+    expect(keyboardCalls.up).toEqual([]);
+    expect(calls.dispose).toBe(true);
+  });
+
+  test("rejects a target that did not become focused", async () => {
+    const calls = { ...handleCalls(), focused: false };
+    const { keyboardCalls, deps } = fakeDeps({
+      resolveTarget: async () => ({ ok: true, element: fakeHandle(calls) }),
+    });
+
+    const result = await keypressGroundedTarget(
+      { key: "a", modifiers: NO_MODIFIERS, target: TARGET },
+      deps,
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "not_interactable", message: "Element could not receive focus" },
+    });
+    expect(keyboardCalls.press).toEqual([]);
     expect(calls.dispose).toBe(true);
   });
 
@@ -439,7 +498,7 @@ describe("keypressGroundedTarget", () => {
     });
     expect(log).toEqual([]);
     expect(keyboardCalls.down).toEqual([]);
-    expect(keyboardCalls.up).toEqual(["Shift", "Meta", "Control", "Alt"]);
+    expect(keyboardCalls.up).toEqual([]);
     expect(calls.dispose).toBe(false);
   });
 
@@ -476,7 +535,7 @@ describe("keypressGroundedTarget", () => {
     });
     expect(log).toEqual([]);
     expect(keyboardCalls.down).toEqual([]);
-    expect(keyboardCalls.up).toEqual(["Shift", "Meta", "Control", "Alt"]);
+    expect(keyboardCalls.up).toEqual([]);
     expect(calls.dispose).toBe(true);
   });
 });

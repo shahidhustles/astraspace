@@ -13,6 +13,32 @@ export interface ClickDeps {
 
 export type ElementPrepResult = { ok: true } | { ok: false; error: BrowserActionError };
 
+export function isHitTestTarget(el: Element): boolean {
+  const view = el.ownerDocument.defaultView;
+  if (!view || view.getComputedStyle(el).pointerEvents === "none") {
+    return false;
+  }
+  const rect = el.getBoundingClientRect();
+  const left = Math.max(0, rect.left);
+  const right = Math.min(view.innerWidth, rect.right);
+  const top = Math.max(0, rect.top);
+  const bottom = Math.min(view.innerHeight, rect.bottom);
+  if (right <= left || bottom <= top) {
+    return false;
+  }
+  const x = left + (right - left) / 2;
+  const y = top + (bottom - top) / 2;
+  let hit = el.ownerDocument.elementFromPoint(x, y);
+  while (hit?.shadowRoot) {
+    const nested = hit.shadowRoot.elementFromPoint(x, y);
+    if (!nested || nested === hit) {
+      break;
+    }
+    hit = nested;
+  }
+  return hit === el || (hit !== null && el.contains(hit));
+}
+
 export async function prepareElementForInteraction(
   element: ElementHandle<Element>,
 ): Promise<ElementPrepResult> {
@@ -40,7 +66,13 @@ export async function clickGroundedTarget(target: GroundedTarget, deps: ClickDep
     if (!prepared.ok) {
       return prepared;
     }
-    const detector = registerNewTabDetector(deps.onCreated);
+    if (!(await element.evaluate(isHitTestTarget))) {
+      return {
+        ok: false,
+        error: { code: "not_interactable", message: "Element is covered or cannot receive pointer events" },
+      };
+    }
+    const detector = registerNewTabDetector(target.tabId, deps.onCreated);
     try {
       deps.invalidate();
       await element.click();

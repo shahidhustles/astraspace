@@ -105,6 +105,14 @@ interface FrameOwnerGeometry {
   scaleY: number;
 }
 
+interface PageWithClient extends Page {
+  _client: () => CDPSession;
+}
+
+function hasCdpClient(page: Page): page is PageWithClient {
+  return "_client" in page && typeof page._client === "function";
+}
+
 export class BrowserPage {
   readonly tabId: number;
   readonly url: string;
@@ -155,9 +163,15 @@ export class BrowserPage {
         await browser.disconnect();
         return { ok: false, error: { code: "attach_failed", message: "Connection exposed no page" } };
       }
-      const session = await page.createCDPSession();
-      const identityTracker = await FrameGraphTracker.create(session, () =>
-        this.snapshots.invalidate(this.tabId),
+      if (!hasCdpClient(page)) {
+        await browser.disconnect();
+        return { ok: false, error: { code: "attach_failed", message: "Connection exposed no CDP client" } };
+      }
+      const session = page._client();
+      const identityTracker = await FrameGraphTracker.create(
+        session,
+        () => this.snapshots.invalidate(this.tabId),
+        { detachOnDispose: false },
       );
       this.browser = browser;
       this.puppeteerPage = page;

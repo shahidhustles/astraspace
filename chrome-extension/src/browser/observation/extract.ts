@@ -380,10 +380,26 @@ export function isInteractiveElement(el: Element, style?: CSSStyleDeclaration): 
 }
 
 export function isDisabled(el: Element): boolean {
-  if (el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled")) {
-    return true;
+  let current: Element | null = el;
+  while (current) {
+    if (current.getAttribute("aria-disabled")?.toLowerCase() === "true") {
+      return true;
+    }
+    if (current !== el && current.tagName.toLowerCase() === "fieldset" && current.hasAttribute("disabled")) {
+      const firstLegend = Array.from(current.children).find(
+        (child) => child.tagName.toLowerCase() === "legend",
+      );
+      if (!firstLegend?.contains(el)) {
+        return true;
+      }
+    }
+    current = current.parentElement;
   }
-  return (el as Element & { disabled?: boolean }).disabled === true;
+  return (
+    el.hasAttribute("disabled") ||
+    (el as Element & { disabled?: boolean }).disabled === true ||
+    el.matches(":disabled")
+  );
 }
 
 export function isSensitiveControl(el: Element, tag = el.tagName.toLowerCase()): boolean {

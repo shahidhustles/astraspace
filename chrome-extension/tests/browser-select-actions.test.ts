@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Window } from "happy-dom";
 import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import {
   applyOptionSelection,
@@ -9,7 +10,7 @@ import {
   type SelectDeps,
   type SelectLookup,
 } from "../src/browser/actions/select";
-import { BROWSER_ACTION_MESSAGE } from "../src/browser/actions/types";
+import { BROWSER_ACTION_MESSAGE, SELECT_OPTIONS_LIMIT, type SelectOption } from "../src/browser/actions/types";
 import { handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
 import type { GroundedTarget, TargetResolutionResult } from "../src/browser/types";
 
@@ -38,7 +39,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     keypress: async () => ({ ok: true, url: "https://example.com" }),
     scroll: async () => ({ ok: true, url: "https://example.com", position: { x: 0, y: 0 } }),
     scrollToText: async () => ({ ok: true, url: "https://example.com", position: { x: 0, y: 0 } }),
-    getSelectOptions: async () => ({ ok: true, url: "https://example.com", options: OPTIONS }),
+    getSelectOptions: async () => ({ ok: true, url: "https://example.com", options: OPTIONS, optionsTruncated: false }),
     selectOption: async () => ({ ok: true, url: "https://example.com", selectedIndex: 1 }),
     openTab: async () => ({ ok: false, error: { code: "chrome_api_error", message: "not used" } }),
     switchTab: async () => ({ ok: false, error: { code: "missing_tab", message: "not used" } }),
@@ -54,7 +55,7 @@ describe("browser_get_select_options dispatch", () => {
     const runtime = fakeRuntime({
       getSelectOptions: async (target) => {
         received = target;
-        return { ok: true, url: "https://example.com/final", options: OPTIONS };
+        return { ok: true, url: "https://example.com/final", options: OPTIONS, optionsTruncated: true };
       },
     });
 
@@ -70,7 +71,7 @@ describe("browser_get_select_options dispatch", () => {
       tabId: 7,
       url: "https://example.com/final",
       snapshotInvalidated: false,
-      data: { kind: "get_select_options", options: OPTIONS },
+      data: { kind: "get_select_options", options: OPTIONS, optionsTruncated: true },
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -222,7 +223,7 @@ describe("getSelectOptions", () => {
     opts: { options?: unknown; throws?: boolean } = {},
   ): ElementHandle<Element> {
     return {
-      evaluate: async (fn: (node: Element) => unknown) => {
+      evaluate: async (fn: (node: Element, ...args: unknown[]) => unknown, ...args: unknown[]) => {
         if (fn === readSelectOptions) {
           calls.read = true;
           if (opts.throws) {
@@ -264,14 +265,35 @@ describe("getSelectOptions", () => {
   test("resolves, reads options, does not invalidate, and cleans up", async () => {
     const calls = { read: false, dispose: false };
     const { log, deps } = fakeDeps();
-    deps.resolveTarget = resolveWith(log, calls, { options: OPTIONS });
+    deps.resolveTarget = resolveWith(log, calls, { options: { records: OPTIONS, total: OPTIONS.length } });
 
     const result = await getSelectOptions(TARGET, deps);
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/final", options: OPTIONS });
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com/final",
+      options: OPTIONS,
+      optionsTruncated: false,
+    });
     expect(log).toEqual(["resolve"]);
     expect(calls.read).toBe(true);
     expect(calls.dispose).toBe(true);
+  });
+
+  test("flags truncation without altering returned records", async () => {
+    const calls = { read: false, dispose: false };
+    const { log, deps } = fakeDeps();
+    deps.resolveTarget = resolveWith(log, calls, { options: { records: OPTIONS, total: 90 } });
+
+    const result = await getSelectOptions(TARGET, deps);
+
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com/final",
+      options: OPTIONS,
+      optionsTruncated: true,
+    });
+    expect(log).toEqual(["resolve"]);
   });
 
   test("returns not_native_select for a non-select without invalidating", async () => {
@@ -318,6 +340,149 @@ describe("getSelectOptions", () => {
   });
 });
 
+describe("native select disabled state", () => {
+  test("reports options as disabled when their select or optgroup is disabled", () => {
+    const window = new Window();
+    window.document.body.innerHTML = `
+      <select id="disabled-select" disabled><option value="a">Alpha</option></select>
+      <select id="grouped"><optgroup disabled><option value="b">Beta</option></optgroup></select>
+    `;
+    const disabledSelect = window.document.querySelector("#disabled-select");
+    const groupedSelect = window.document.querySelector("#grouped");
+    if (!disabledSelect || !groupedSelect) {
+      throw new Error("select fixture is missing");
+    }
+
+    expect(readSelectOptions(disabledSelect as unknown as Element)?.records[0]?.disabled).toBe(true);
+    expect(readSelectOptions(groupedSelect as unknown as Element)?.records[0]?.disabled).toBe(true);
+  });
+
+  test("rejects a disabled select and an option in a disabled optgroup", () => {
+    const window = new Window();
+    window.document.body.innerHTML = `
+      <select id="disabled-select" disabled>
+        <option value="a">Alpha</option><option value="b">Beta</option>
+      </select>
+      <select id="grouped">
+        <option value="a">Alpha</option>
+        <optgroup disabled><option value="b">Beta</option></optgroup>
+      </select>
+    `;
+    const disabledSelect = window.document.querySelector("#disabled-select");
+    const groupedSelect = window.document.querySelector("#grouped");
+    if (!disabledSelect || !groupedSelect) {
+      throw new Error("select fixture is missing");
+    }
+
+    const identity = { index: 1, label: "Beta", value: "b" };
+    expect(findOptionMatch(disabledSelect as unknown as Element, identity)).toEqual({ kind: "disabled_select" });
+    expect(findOptionMatch(groupedSelect as unknown as Element, identity)).toEqual({ kind: "disabled" });
+  });
+});
+
+describe("bounded select inspection", () => {
+  function windowWithOptions(count: number, selectedIndex?: number): Window {
+    const win = new Window({ url: "https://fixture.test/" });
+    const options = Array.from(
+      { length: count },
+      (_, index) => `<option value="v${index}">Label ${index}</option>`,
+    ).join("");
+    win.document.body.innerHTML = `<select id="big">${options}</select>`;
+    if (selectedIndex !== undefined) {
+      (win.document.querySelector("#big") as unknown as HTMLSelectElement).selectedIndex =
+        selectedIndex;
+    }
+    return win;
+  }
+
+  function optionRow(index: number, selected = false): SelectOption {
+    return {
+      index,
+      label: `Label ${index}`,
+      value: `v${index}`,
+      disabled: false,
+      selected,
+    };
+  }
+
+  test(`returns at most ${SELECT_OPTIONS_LIMIT} complete records with truncation flagged`, () => {
+    const win = windowWithOptions(SELECT_OPTIONS_LIMIT + 5);
+    const select = win.document.querySelector("#big") as unknown as Element;
+
+    const page = readSelectOptions(select);
+
+    expect(page).not.toBeNull();
+    expect(page?.total).toBe(SELECT_OPTIONS_LIMIT + 5);
+    expect(page?.records.length).toBe(SELECT_OPTIONS_LIMIT);
+    expect(page?.records[0]).toEqual(optionRow(0, true));
+    expect(page?.records[SELECT_OPTIONS_LIMIT - 1]).toEqual(optionRow(SELECT_OPTIONS_LIMIT - 1));
+  });
+
+  test("keeps the selected row visible inside a capped list", () => {
+    const win = windowWithOptions(SELECT_OPTIONS_LIMIT + 2, 3);
+    const page = readSelectOptions(win.document.querySelector("#big") as unknown as Element);
+
+    expect(page?.records[3]?.selected).toBe(true);
+    expect(page?.records.filter((record) => record.selected)).toEqual([optionRow(3, true)]);
+  });
+
+  test("returns every record untruncated when under the cap", () => {
+    const win = windowWithOptions(SELECT_OPTIONS_LIMIT);
+    const page = readSelectOptions(win.document.querySelector("#big") as unknown as Element);
+
+    expect(page?.total).toBe(SELECT_OPTIONS_LIMIT);
+    expect(page?.records.length).toBe(SELECT_OPTIONS_LIMIT);
+    expect(page?.records[SELECT_OPTIONS_LIMIT - 1]).toEqual(optionRow(SELECT_OPTIONS_LIMIT - 1));
+  });
+
+  test("never truncates oversized identity text and stays JSON-safe", async () => {
+    const longText = "L".repeat(5000);
+    const win = new Window({ url: "https://fixture.test/" });
+    win.document.body.innerHTML =
+      `<select id="wide"><option value="${longText}">${longText}</option></select>`;
+    const page = readSelectOptions(win.document.querySelector("#wide") as unknown as Element);
+
+    expect(page?.total).toBe(1);
+    expect(page?.records[0]?.label).toBe(longText);
+    expect(page?.records[0]?.value).toBe(longText);
+
+    const result = await getSelectOptions(TARGET, await Promise.resolve({
+      resolveTarget: async (): Promise<TargetResolutionResult> => ({
+        ok: true,
+        element: {
+          evaluate: async (fn: unknown) =>
+            fn === readSelectOptions ? page : null,
+          dispose: async () => {},
+        } as unknown as ElementHandle<Element>,
+      }),
+      invalidate: () => {},
+      currentUrl: () => "https://example.com/final",
+    }));
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  test("every returned option remains selectable by its exact identity", async () => {
+    const win = new Window({ url: "https://fixture.test/" });
+    const body = Array.from(
+      { length: SELECT_OPTIONS_LIMIT },
+      (_, index) => `<option value="v${index}">Label ${index}</option>`,
+    ).join("");
+    win.document.body.innerHTML = `<select id="big">${body}</select>`;
+    const element = win.document.querySelector("#big") as unknown as Element;
+    (element as unknown as HTMLSelectElement).selectedIndex = -1;
+    const page = readSelectOptions(element);
+    for (const record of page?.records ?? []) {
+      const lookup = findOptionMatch(element, {
+        index: record.index,
+        label: record.label,
+        value: record.value,
+      });
+      expect(lookup.kind === "ok" && !lookup.selected).toBe(true);
+    }
+  });
+});
+
 describe("selectOption", () => {
   interface Calls {
     find: boolean;
@@ -336,7 +501,7 @@ describe("selectOption", () => {
         }
         if (fn === findOptionMatch) {
           calls.find = true;
-          return opts.lookup ?? { kind: "ok", index: 1 };
+          return opts.lookup ?? { kind: "ok", index: 1, selected: false };
         }
         if (fn === applyOptionSelection) {
           calls.apply = true;
@@ -390,6 +555,7 @@ describe("selectOption", () => {
     ["disabled", { kind: "disabled" }, "option_disabled"],
     ["ambiguous", { kind: "ambiguous", count: 2 }, "ambiguous_option"],
     ["not native", { kind: "not_native" }, "not_native_select"],
+    ["disabled select", { kind: "disabled_select" }, "disabled_target"],
   ] as const)("rejects a %s match before invalidating", async (_name, lookup, code) => {
     const calls = { find: false, apply: false, dispose: false };
     const { log, deps } = fakeDeps();
@@ -432,6 +598,30 @@ describe("selectOption", () => {
 
     expect(result).toEqual({ ok: false, error: { code: "action_failed", message: "The option could not be selected" } });
     expect(log).toEqual(["resolve", "invalidate"]);
+    expect(calls.dispose).toBe(true);
+  });
+
+  test("rejects an option that is already selected without invalidating", async () => {
+    const calls = { find: false, apply: false, dispose: false };
+    const { log, deps } = fakeDeps();
+    deps.resolveTarget = async (): Promise<TargetResolutionResult> => {
+      log.push("resolve");
+      return {
+        ok: true,
+        element: fakeHandle(calls, {
+          lookup: { kind: "ok", index: 1, selected: true },
+        }),
+      };
+    };
+
+    const result = await selectOption(TARGET, IDENTITY, deps);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "action_failed", message: "The requested option is already selected" },
+    });
+    expect(log).toEqual(["resolve"]);
+    expect(calls.apply).toBe(false);
     expect(calls.dispose).toBe(true);
   });
 

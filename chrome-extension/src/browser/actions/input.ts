@@ -12,7 +12,14 @@ export interface InputDeps {
 export type EditabilityResult = { ok: true } | { ok: false; error: BrowserActionError };
 
 export function isReadOnly(el: Element): boolean {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+  if (el.getAttribute("aria-readonly")?.toLowerCase() === "true") {
+    return true;
+  }
+  const view = el.ownerDocument.defaultView;
+  if (!view) {
+    return false;
+  }
+  if (el instanceof view.HTMLInputElement || el instanceof view.HTMLTextAreaElement) {
     return el.readOnly;
   }
   return false;
@@ -33,14 +40,28 @@ export function isEditableControl(el: Element): boolean {
   return (el as HTMLElement).isContentEditable === true;
 }
 
-function clearEditableControl(el: Element): void {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-    el.value = "";
+export function clearEditableControl(el: Element): void {
+  const view = el.ownerDocument.defaultView;
+  if (view && el instanceof view.HTMLInputElement) {
+    const setter = Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, "value")?.set;
+    if (setter) {
+      setter.call(el, "");
+    } else {
+      el.value = "";
+    }
+  } else if (view && el instanceof view.HTMLTextAreaElement) {
+    const setter = Object.getOwnPropertyDescriptor(view.HTMLTextAreaElement.prototype, "value")?.set;
+    if (setter) {
+      setter.call(el, "");
+    } else {
+      el.value = "";
+    }
   } else {
     el.textContent = "";
   }
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
+  const EventConstructor = view?.Event ?? Event;
+  el.dispatchEvent(new EventConstructor("input", { bubbles: true }));
+  el.dispatchEvent(new EventConstructor("change", { bubbles: true }));
 }
 
 export async function typeGroundedTarget(

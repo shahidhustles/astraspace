@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:integration": "bun test --timeout 30000 tests/browser-observation.integration.test.ts"
+    "test:integration": "bun test --timeout 30000 tests/browser-observation.integration.test.ts tests/browser-action-catalog.integration.test.ts tests/browser-mv3-runtime.integration.test.ts"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

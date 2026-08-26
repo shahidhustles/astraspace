@@ -241,6 +241,7 @@ function fakePage(
     axSnapshots: [],
     url: () => page.currentUrl,
     createCDPSession: async () => session,
+    _client: () => session,
     mainFrame: () => mainFrame,
     evaluate: async (expression: string): Promise<unknown> => mainFrame.evaluate(expression),
     title: async () => {
