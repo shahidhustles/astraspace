@@ -2,7 +2,6 @@ import type {
   ElementHandle,
   Frame,
   JSHandle,
-  Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { bindFrameGraph } from "./frame-binding";
 import type { CommittedGroundingRecord, PathStep, RectBounds } from "./observation/types";
@@ -75,7 +74,7 @@ async function attemptResolve(
   const verified: ElementHandle[] = [];
   try {
     for (const candidate of candidates) {
-      if (await verifyCandidate(ctx.page, candidate, lookup.grounding)) {
+      if (await verifyCandidate(frame, candidate, lookup.grounding)) {
         verified.push(candidate);
       }
     }
@@ -144,19 +143,10 @@ export async function locateCandidates(
     if (pathElement) {
       created.push(pathElement);
     }
-    const cssElement = await locateByCssSegments(frame, grounding.cssSegments);
-    if (cssElement) {
-      created.push(cssElement);
-    }
-    const xpathElement = await locateByXpathSegments(frame, grounding.xpathSegments);
-    if (xpathElement) {
-      created.push(xpathElement);
-    }
-    created.push(...(await frame.$$(grounding.tag)));
-    const boundsElement = await locateByBounds(frame, grounding);
-    if (boundsElement) {
-      created.push(boundsElement);
-    }
+    created.push(...(await locateByCssSegments(frame, grounding.cssSegments)));
+    created.push(...(await locateByXpathSegments(frame, grounding.xpathSegments)));
+    created.push(...(await locateInRecordedScope(frame, grounding)));
+    created.push(...(await locateByBounds(frame, grounding)));
     return await dedupeByBackendNodeId(created);
   } catch (error) {
     await disposeElements(created);
@@ -165,7 +155,7 @@ export async function locateCandidates(
 }
 
 export async function verifyCandidate(
-  page: Page,
+  frame: Frame,
   element: ElementHandle,
   grounding: CommittedGroundingRecord,
 ): Promise<boolean> {
@@ -231,11 +221,14 @@ export async function verifyCandidate(
   if (grounding.role === null && grounding.name === null) {
     return true;
   }
-  const ax = await page.accessibility.snapshot({ root: element, interestingOnly: false });
-  if (ax?.role !== undefined && grounding.role !== null && ax.role !== grounding.role) {
+  const ax = await frame.accessibility.snapshot({ root: element, interestingOnly: false });
+  if (!ax) {
     return false;
   }
-  if (ax?.name !== undefined && grounding.name !== null && ax.name !== grounding.name) {
+  if (grounding.role !== null && ax.role !== grounding.role) {
+    return false;
+  }
+  if (grounding.name !== null && ax.name !== grounding.name) {
     return false;
   }
   return true;
@@ -273,11 +266,11 @@ async function resolveDomPath(frame: Frame, domPath: readonly PathStep[]): Promi
 async function locateByCssSegments(
   frame: Frame,
   segments: readonly string[],
-): Promise<ElementHandle | null> {
+): Promise<ElementHandle[]> {
   if (segments.length === 0) {
-    return null;
+    return [];
   }
-  return evaluateSingleElement(frame, (segments: string[]) => {
+  return evaluateElements(frame, (segments: string[]) => {
     let current = [...document.querySelectorAll(segments[0])];
     for (let i = 1; i < segments.length; i++) {
       const next: Element[] = [];
@@ -288,24 +281,24 @@ async function locateByCssSegments(
       }
       current = next;
       if (current.length === 0) {
-        return null;
+        return [];
       }
     }
-    return current[0] ?? null;
+    return current;
   }, [...segments]);
 }
 
 async function locateByXpathSegments(
   frame: Frame,
   segments: readonly string[],
-): Promise<ElementHandle | null> {
+): Promise<ElementHandle[]> {
   if (segments.length === 0) {
-    return null;
+    return [];
   }
-  return evaluateSingleElement(frame, (segments: string[]) => {
+  return evaluateElements(frame, (segments: string[]) => {
     const body = document.body;
     if (!body) {
-      return null;
+      return [];
     }
     const evalIn = (scope: Node, segment: string): Element[] => {
       const result = document.evaluate(
@@ -334,32 +327,83 @@ async function locateByXpathSegments(
       }
       current = next;
       if (current.length === 0) {
-        return null;
+        return [];
       }
     }
-    return current[0] ?? null;
+    return current;
   }, [...segments]);
 }
 
-async function locateByBounds(frame: Frame, grounding: CommittedGroundingRecord): Promise<ElementHandle | null> {
+async function locateInRecordedScope(
+  frame: Frame,
+  grounding: CommittedGroundingRecord,
+): Promise<ElementHandle[]> {
+  const hasShadowBoundary = grounding.domPath.some((step) => step.kind === "shadow");
+  if (hasShadowBoundary && grounding.cssSegments.length <= 1) {
+    return [];
+  }
+  if (grounding.cssSegments.length <= 1) {
+    return frame.$$(grounding.tag);
+  }
+  return evaluateElements(frame, (segments: string[], tag: string) => {
+    let hosts = [...document.querySelectorAll(segments[0])];
+    for (let i = 1; i < segments.length - 1; i++) {
+      const nextHosts: Element[] = [];
+      for (const host of hosts) {
+        if (host.shadowRoot) {
+          nextHosts.push(...host.shadowRoot.querySelectorAll(segments[i]));
+        }
+      }
+      hosts = nextHosts;
+    }
+    const matches: Element[] = [];
+    for (const host of hosts) {
+      if (host.shadowRoot) {
+        matches.push(...host.shadowRoot.querySelectorAll(tag));
+      }
+    }
+    return matches;
+  }, [...grounding.cssSegments], grounding.tag);
+}
+
+async function locateByBounds(frame: Frame, grounding: CommittedGroundingRecord): Promise<ElementHandle[]> {
   const bounds = grounding.bounds;
   if (bounds === null) {
-    return null;
+    return [];
   }
-  return evaluateSingleElement(frame, (tag: string, bounds: RectBounds) => {
-    for (const el of document.querySelectorAll(tag)) {
+  const hasShadowBoundary = grounding.domPath.some((step) => step.kind === "shadow");
+  if (hasShadowBoundary && grounding.cssSegments.length <= 1) {
+    return [];
+  }
+  return evaluateElements(frame, (segments: string[], tag: string, bounds: RectBounds) => {
+    let candidates: Element[];
+    if (segments.length <= 1) {
+      candidates = [...document.querySelectorAll(tag)];
+    } else {
+      let hosts = [...document.querySelectorAll(segments[0])];
+      for (let i = 1; i < segments.length - 1; i++) {
+        const nextHosts: Element[] = [];
+        for (const host of hosts) {
+          if (host.shadowRoot) {
+            nextHosts.push(...host.shadowRoot.querySelectorAll(segments[i]));
+          }
+        }
+        hosts = nextHosts;
+      }
+      candidates = hosts.flatMap((host) =>
+        host.shadowRoot ? [...host.shadowRoot.querySelectorAll(tag)] : [],
+      );
+    }
+    return candidates.filter((el) => {
       const rect = el.getBoundingClientRect();
-      if (
+      return (
         Math.abs(rect.x - bounds.x) <= 1 &&
         Math.abs(rect.y - bounds.y) <= 1 &&
         Math.abs(rect.width - bounds.width) <= 1 &&
         Math.abs(rect.height - bounds.height) <= 1
-      ) {
-        return el;
-      }
-    }
-    return null;
-  }, grounding.tag, { ...bounds });
+      );
+    });
+  }, [...grounding.cssSegments], grounding.tag, { ...bounds });
 }
 
 async function evaluateSingleElement<Args extends unknown[]>(
@@ -374,6 +418,36 @@ async function evaluateSingleElement<Args extends unknown[]>(
     return null;
   }
   return element as ElementHandle;
+}
+
+async function evaluateElements<Args extends unknown[]>(
+  frame: Frame,
+  fn: (...args: Args) => Element[],
+  ...args: Args
+): Promise<ElementHandle[]> {
+  const collection = await frame.evaluateHandle(fn as (...args: unknown[]) => unknown, ...args);
+  const elements: ElementHandle[] = [];
+  try {
+    const properties = await collection.getProperties();
+    for (const [name, handle] of [...properties.entries()].sort(([left], [right]) => Number(left) - Number(right))) {
+      if (!/^\d+$/.test(name)) {
+        await handle.dispose().catch(() => {});
+        continue;
+      }
+      const element = handle.asElement();
+      if (element && await element.evaluate((node) => node instanceof Element)) {
+        elements.push(element as ElementHandle<Element>);
+      } else {
+        await handle.dispose().catch(() => {});
+      }
+    }
+    return elements;
+  } catch (error) {
+    await disposeElements(elements);
+    throw error;
+  } finally {
+    await collection.dispose().catch(() => {});
+  }
 }
 
 async function dedupeByBackendNodeId(handles: ElementHandle[]): Promise<ElementHandle[]> {

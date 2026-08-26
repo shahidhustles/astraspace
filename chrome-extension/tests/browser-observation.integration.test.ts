@@ -344,7 +344,7 @@ describe("frame-aware observation in Chrome", () => {
         return new Response("not found", { status: 404 });
       },
     });
-    crossOriginUrl = `http://127.0.0.1:${serverB.port}/browser-frame-child.html?role=cross`;
+    crossOriginUrl = `http://localhost:${serverB.port}/browser-frame-child.html?role=cross`;
 
     const mainHtml = (await Bun.file(FRAME_FIXTURE_PATH).text()).replace(
       "{{CROSS_ORIGIN_URL}}",
@@ -371,7 +371,7 @@ describe("frame-aware observation in Chrome", () => {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      args: ["--no-sandbox"],
+      args: ["--no-sandbox", "--site-per-process"],
       defaultViewport: {
         width: VIEWPORT_WIDTH,
         height: VIEWPORT_HEIGHT,
@@ -683,6 +683,8 @@ describe("frame-aware observation in Chrome", () => {
       const state = result.state as BrowserState;
       const rerenderRef = refByName(state, "Rerender action");
       const target = targetFor(state, rerenderRef);
+      const shadowRef = refByName(state, "Shadow action");
+      const shadowTarget = targetFor(state, shadowRef);
 
       await page.evaluate(() => window.__rerender("same"));
       await sleep(200);
@@ -707,6 +709,23 @@ describe("frame-aware observation in Chrome", () => {
       expect(duplicate.ok).toBe(false);
       if (!duplicate.ok) {
         expect(duplicate.code).toBe("ambiguous_ref");
+      }
+
+      await page.evaluate(() => window.__rerenderShadow("same"));
+      await sleep(200);
+      const movedShadow = await wrapper.resolveTarget(shadowTarget);
+      expect(movedShadow.ok).toBe(true);
+      if (movedShadow.ok) {
+        const id = await movedShadow.element.evaluate((element) => element.id);
+        expect(id).toBe("moved-shadow-action");
+      }
+
+      await page.evaluate(() => window.__rerenderShadow("duplicate"));
+      await sleep(200);
+      const duplicateShadow = await wrapper.resolveTarget(shadowTarget);
+      expect(duplicateShadow.ok).toBe(false);
+      if (!duplicateShadow.ok) {
+        expect(duplicateShadow.code).toBe("ambiguous_ref");
       }
     },
     30_000,

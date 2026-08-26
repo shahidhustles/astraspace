@@ -240,6 +240,10 @@ class FakeFrame {
   detachAdoptOnce = false;
   detachAdoptAll = false;
   private adoptDetachConsumed = false;
+  accessibilityCalls = 0;
+  accessibility = {
+    snapshot: async (_options: { root?: FakeElementHandle } = {}): Promise<Record<string, unknown> | null> => null,
+  };
 
   constructor(
     readonly win: Window,
@@ -284,14 +288,25 @@ class FakeFrame {
       "args",
       `return (${source})(...args);`,
     );
-    const resolved = runner(this.win, this.win.document, this.win.Element, this.win.ShadowRoot, args) as
-      | Node
-      | null;
-    return {
+    const resolved = runner(this.win, this.win.document, this.win.Element, this.win.ShadowRoot, args) as unknown;
+    const handleFor = (value: unknown): FakeHandleResult => ({
       asElement: () =>
-        resolved && resolved.nodeType === 1 && resolved.isConnected
-          ? new FakeElementHandle(resolved as Element, this.win, registerBackend(this.win, resolved as Element))
+        value instanceof this.win.Element && value.isConnected
+          ? new FakeElementHandle(value, this.win, registerBackend(this.win, value))
           : null,
+      getProperties: async () => {
+        const properties = new Map<string, FakeHandleResult>();
+        if (Array.isArray(value)) {
+          for (const [index, item] of value.entries()) {
+            properties.set(String(index), handleFor(item));
+          }
+        }
+        return properties;
+      },
+      dispose: async () => {},
+    });
+    return {
+      ...handleFor(resolved),
       dispose: async () => {},
     };
   }
@@ -333,6 +348,7 @@ class FakeFrame {
 
 interface FakeHandleResult {
   asElement: () => FakeElementHandle | null;
+  getProperties?: () => Promise<Map<string, FakeHandleResult>>;
   dispose: () => Promise<void>;
 }
 
@@ -342,6 +358,22 @@ interface FakePage extends Page {
 }
 
 function fakePage(win: Window, main: FakeFrame, session: FakeSession, currentUrl = "https://fixture.test/"): FakePage {
+  const accessibilitySnapshot = async ({ root }: { root?: FakeElementHandle } = {}) => {
+    const element = root?.element ?? null;
+    if (!element) {
+      return null;
+    }
+    const tag = element.tagName.toLowerCase();
+    const role =
+      element.getAttribute("role") ??
+      (tag === "button" ? "button" : tag === "a" ? "link" : tag === "input" ? "textbox" : null);
+    const rawName =
+      element.getAttribute("aria-label") ||
+      element.getAttribute("title") ||
+      (element.textContent ?? "").trim();
+    const name = rawName?.replace(/\s+/g, " ").trim();
+    return { role: role ?? undefined, name: name || undefined };
+  };
   const page = {
     currentUrl,
     main,
@@ -351,25 +383,20 @@ function fakePage(win: Window, main: FakeFrame, session: FakeSession, currentUrl
     goto: async () => ({}),
     title: async () => "Resolution fixture",
     accessibility: {
-      snapshot: async ({ root }: { root?: FakeElementHandle } = {}) => {
-        const element = root?.element ?? null;
-        if (!element) {
-          return null;
-        }
-        const tag = element.tagName.toLowerCase();
-        const role =
-          element.getAttribute("role") ??
-          (tag === "button" ? "button" : tag === "a" ? "link" : tag === "input" ? "textbox" : null);
-        const rawName =
-          element.getAttribute("aria-label") ||
-          element.getAttribute("title") ||
-          (element.textContent ?? "").trim();
-        const name = rawName?.replace(/\s+/g, " ").trim();
-        return { role: role ?? undefined, name: name || undefined };
-      },
+      snapshot: accessibilitySnapshot,
     },
     screenshot: async () => JPEG_BASE64,
   } as FakePage;
+  const assignAccessibility = (frame: FakeFrame): void => {
+    frame.accessibility.snapshot = async (options = {}) => {
+      frame.accessibilityCalls += 1;
+      return accessibilitySnapshot(options);
+    };
+    for (const child of frame.children) {
+      assignAccessibility(child);
+    }
+  };
+  assignAccessibility(main);
   return page;
 }
 
@@ -647,10 +674,13 @@ describe("target resolution", () => {
 
     const mainFunctionCalls = main.functionCalls;
     const mainSelectorCalls = main.selectorCalls;
+    const mainAccessibilityCalls = main.accessibilityCalls;
     const fromChild = expectResolved(await resolveTarget(ctx, store, target(childSnapshot, 1)));
     expect(await fromChild.evaluate((el) => (el as Element).id)).toBe("child-btn");
     expect(main.functionCalls).toBe(mainFunctionCalls);
     expect(main.selectorCalls).toBe(mainSelectorCalls);
+    expect(main.accessibilityCalls).toBe(mainAccessibilityCalls);
+    expect(childFrame.accessibilityCalls).toBeGreaterThan(0);
   });
 
   test("a child-frame navigation stales only the child target before any locator runs", async () => {
@@ -876,6 +906,118 @@ describe("target resolution", () => {
 
     const result = expectResolved(await resolveTarget(ctx, store, target(snapshot, 1)));
     expect(await result.evaluate((el) => (el as Element).id)).toBe("inner");
+  });
+
+  test("a moved shadow control resolves inside its original shadow scope", async () => {
+    const win = shadowFixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { ctx } = await resolutionContext(win);
+    const sharedIdentity = { role: "button", name: "Inner", text: "Inner" };
+    const snapshot = commit(
+      store,
+      [observed(1, "button", sharedIdentity)],
+      [
+        grounding(1, "button", {
+          ...sharedIdentity,
+          domPath: [{ kind: "child", index: 0 }, { kind: "shadow" }, { kind: "child", index: 0 }],
+          cssSegments: ["div:nth-child(1)", "button:nth-child(1)"],
+          xpathSegments: ["/div[1]", "/button[1]"],
+        }),
+      ],
+    );
+    const root = win.document.getElementById("host")?.shadowRoot;
+    if (!root) throw new Error("shadow root missing");
+    root.innerHTML = `<div><button id="moved">Inner</button></div>`;
+
+    const result = expectResolved(await resolveTarget(ctx, store, target(snapshot, 1)));
+
+    expect(await result.evaluate((el) => (el as Element).id)).toBe("moved");
+  });
+
+  test("duplicate replacements inside a shadow scope return ambiguous_ref", async () => {
+    const win = shadowFixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { ctx } = await resolutionContext(win);
+    const sharedIdentity = { role: "button", name: "Inner", text: "Inner" };
+    const snapshot = commit(
+      store,
+      [observed(1, "button", sharedIdentity)],
+      [
+        grounding(1, "button", {
+          ...sharedIdentity,
+          domPath: [{ kind: "child", index: 0 }, { kind: "shadow" }, { kind: "child", index: 0 }],
+          cssSegments: ["div:nth-child(1)", "button:nth-child(1)"],
+          xpathSegments: ["/div[1]", "/button[1]"],
+        }),
+      ],
+    );
+    const root = win.document.getElementById("host")?.shadowRoot;
+    if (!root) throw new Error("shadow root missing");
+    root.innerHTML = `<button>Inner</button><button>Inner</button>`;
+
+    const result = await resolveTarget(ctx, store, target(snapshot, 1));
+
+    expect(result).toEqual({
+      ok: false,
+      code: "ambiguous_ref",
+      target: target(snapshot, 1),
+      reason: expect.any(String),
+    });
+  });
+
+  test("bounds fallback cannot escape the recorded shadow scope", async () => {
+    const win = shadowFixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { ctx } = await resolutionContext(win);
+    const sharedIdentity = { role: "button", name: "Inner", text: "Inner" };
+    const snapshot = commit(
+      store,
+      [observed(1, "button", { ...sharedIdentity, bounds: { x: 8, y: 8, width: 90, height: 28 } })],
+      [
+        grounding(1, "button", {
+          ...sharedIdentity,
+          bounds: { x: 8, y: 8, width: 90, height: 28 },
+          domPath: [{ kind: "child", index: 0 }, { kind: "shadow" }, { kind: "child", index: 0 }],
+          cssSegments: ["div:nth-child(1)", "button:nth-child(1)"],
+          xpathSegments: ["/div[1]", "/button[1]"],
+        }),
+      ],
+    );
+    const root = win.document.getElementById("host")?.shadowRoot;
+    if (!root) throw new Error("shadow root missing");
+    root.innerHTML = "";
+    const outside = win.document.createElement("button");
+    outside.textContent = "Inner";
+    Object.defineProperty(outside, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+    win.document.body.appendChild(outside);
+
+    const result = await resolveTarget(ctx, store, target(snapshot, 1));
+
+    expect(result).toEqual({
+      ok: false,
+      code: "target_not_found",
+      target: target(snapshot, 1),
+      reason: expect.any(String),
+    });
+  });
+
+  test("missing accessibility data cannot bypass recorded semantics", async () => {
+    const win = fixtureWindow("single");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { ctx, main } = await resolutionContext(win);
+    const snapshot = commitRendered(store, captureRendered(win));
+    main.accessibility.snapshot = async () => null;
+
+    const result = await resolveTarget(ctx, store, target(snapshot, 1));
+
+    expect(result).toEqual({
+      ok: false,
+      code: "target_not_found",
+      target: target(snapshot, 1),
+      reason: expect.any(String),
+    });
   });
 
   test("more than one verified candidate returns ambiguous_ref with no element", async () => {

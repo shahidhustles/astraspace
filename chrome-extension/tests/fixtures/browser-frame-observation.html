@@ -83,6 +83,16 @@
         }
         area.innerHTML = '<button id="rerender-button" type="button">Rerender action</button>';
       };
+
+      window.__rerenderShadow = (mode) => {
+        if (mode === "duplicate") {
+          shadow.innerHTML =
+            '<button type="button">Shadow action</button>' +
+            '<button type="button">Shadow action</button>';
+          return;
+        }
+        shadow.innerHTML = '<div><button id="moved-shadow-action" type="button">Shadow action</button></div>';
+      };
     </script>
   </body>
 </html>
