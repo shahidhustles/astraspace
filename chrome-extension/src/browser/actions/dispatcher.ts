@@ -7,10 +7,13 @@ import type {
   BrowserActionData,
   ClearInputResult,
   ClickResult,
+  GetSelectOptionsResult,
   KeypressInput,
   KeypressResult,
   ScrollInput,
   ScrollResult,
+  SelectOptionIdentity,
+  SelectOptionResult,
   TypeResult,
 } from "./types";
 
@@ -25,6 +28,8 @@ export interface BrowserActionRuntime {
   keypress: (input: KeypressInput) => Promise<KeypressResult>;
   scroll: (input: ScrollInput) => Promise<ScrollResult>;
   scrollToText: (text: string, occurrence: number) => Promise<ScrollResult>;
+  getSelectOptions: (target: GroundedTarget) => Promise<GetSelectOptionsResult>;
+  selectOption: (target: GroundedTarget, option: SelectOptionIdentity) => Promise<SelectOptionResult>;
   openTab: (url: string) => Promise<AttachResult>;
   switchTab: (tabId: number) => Promise<AttachResult>;
   closeTab: (tabId: number) => Promise<CloseResult>;
@@ -66,6 +71,10 @@ export async function dispatchBrowserAction(
         return await scrollAction(request.input, runtime);
       case "browser_scroll_to_text":
         return await scrollToTextAction(request.input, runtime);
+      case "browser_get_select_options":
+        return await selectOptionsAction(request.input, runtime);
+      case "browser_select_option":
+        return await selectOptionAction(request.input, runtime);
       case "browser_open_tab":
         return await tabLifecycleAction(
           "browser_open_tab",
@@ -218,6 +227,43 @@ async function scrollToTextAction(
     url: result.url,
     snapshotInvalidated: true,
     data: { kind: "scroll_to_text", x: result.position.x, y: result.position.y },
+  };
+}
+
+async function selectOptionsAction(
+  target: GroundedTarget,
+  runtime: BrowserActionRuntime,
+): Promise<BrowserActionResult> {
+  const result = await runtime.getSelectOptions(target);
+  if (!result.ok) {
+    return { ok: false, action: "browser_get_select_options", tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action: "browser_get_select_options",
+    tabId: target.tabId,
+    url: result.url,
+    snapshotInvalidated: false,
+    data: { kind: "get_select_options", options: result.options },
+  };
+}
+
+async function selectOptionAction(
+  input: { target: GroundedTarget; index: number; label: string; value: string },
+  runtime: BrowserActionRuntime,
+): Promise<BrowserActionResult> {
+  const identity: SelectOptionIdentity = { index: input.index, label: input.label, value: input.value };
+  const result = await runtime.selectOption(input.target, identity);
+  if (!result.ok) {
+    return { ok: false, action: "browser_select_option", tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action: "browser_select_option",
+    tabId: input.target.tabId,
+    url: result.url,
+    snapshotInvalidated: true,
+    data: { kind: "select_option", selectedIndex: result.selectedIndex },
   };
 }
 

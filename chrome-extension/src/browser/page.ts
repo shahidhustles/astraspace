@@ -38,13 +38,17 @@ import { clickGroundedTarget } from "./actions/element";
 import { clearGroundedTarget, typeGroundedTarget } from "./actions/input";
 import { keypressGroundedTarget } from "./actions/keyboard";
 import { scrollGroundedTarget, scrollToVisibleText } from "./actions/scroll";
+import { getSelectOptions, selectOption } from "./actions/select";
 import type {
   ClearInputResult,
   ClickResult,
+  GetSelectOptionsResult,
   KeypressInput,
   KeypressResult,
   ScrollInput,
   ScrollResult,
+  SelectOptionIdentity,
+  SelectOptionResult,
   TypeResult,
 } from "./actions/types";
 import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
@@ -257,6 +261,22 @@ export class BrowserPage {
       invalidate: () => this.snapshots.invalidate(this.tabId),
       currentUrl: () => this.puppeteerPage?.url() ?? "",
       frame: () => this.puppeteerPage?.mainFrame() ?? null,
+    });
+  }
+
+  async getSelectOptions(target: GroundedTarget): Promise<GetSelectOptionsResult> {
+    return getSelectOptions(target, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
+  }
+
+  async selectOption(target: GroundedTarget, option: SelectOptionIdentity): Promise<SelectOptionResult> {
+    return selectOption(target, option, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
     });
   }
 

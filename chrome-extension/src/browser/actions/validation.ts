@@ -124,6 +124,26 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
         request: { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: parsed.input },
       };
     }
+    case "browser_get_select_options": {
+      const target = parseGroundedTarget(message.input, "browser_get_select_options");
+      if (!target.ok) {
+        return invalid("browser_get_select_options", target.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_get_select_options", input: target.target },
+      };
+    }
+    case "browser_select_option": {
+      const parsed = parseSelectOptionInput(message.input);
+      if (!parsed.ok) {
+        return invalid("browser_select_option", parsed.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_select_option", input: parsed.input },
+      };
+    }
     case "browser_open_tab": {
       const url = parseUrlInput(message, "browser_open_tab");
       if (!url.ok) {
@@ -177,7 +197,14 @@ function parseNoInputRequest(
 
 function parseGroundedTarget(
   input: unknown,
-  action: "browser_click" | "browser_type" | "browser_clear_input" | "browser_keypress" | "browser_scroll",
+  action:
+    | "browser_click"
+    | "browser_type"
+    | "browser_clear_input"
+    | "browser_keypress"
+    | "browser_scroll"
+    | "browser_get_select_options"
+    | "browser_select_option",
 ): { ok: true; target: GroundedTarget } | { ok: false; message: string } {
   if (!isRecord(input)) {
     return { ok: false, message: `${action} requires an input object` };
@@ -329,6 +356,34 @@ function parseScrollToTextInput(
     return { ok: false, message: "browser_scroll_to_text requires a positive integer occurrence" };
   }
   return { ok: true, input: { text: input.text, occurrence: input.occurrence } };
+}
+
+function parseSelectOptionInput(
+  input: unknown,
+): { ok: true; input: { target: GroundedTarget; index: number; label: string; value: string } } | { ok: false; message: string } {
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_select_option requires an input object" };
+  }
+  if (!hasOnlyKeys(input, ["target", "index", "label", "value"])) {
+    return { ok: false, message: "browser_select_option input has unknown fields" };
+  }
+  const target = parseGroundedTarget(input.target, "browser_select_option");
+  if (!target.ok) {
+    return { ok: false, message: target.message };
+  }
+  if (typeof input.index !== "number" || !Number.isInteger(input.index) || input.index < 0) {
+    return { ok: false, message: "browser_select_option requires a non-negative integer index" };
+  }
+  if (typeof input.label !== "string") {
+    return { ok: false, message: "browser_select_option requires a string label" };
+  }
+  if (typeof input.value !== "string") {
+    return { ok: false, message: "browser_select_option requires a string value" };
+  }
+  return {
+    ok: true,
+    input: { target: target.target, index: input.index, label: input.label, value: input.value },
+  };
 }
 
 function parseUrlInput(

@@ -72,6 +72,17 @@
       <div id="key-log"></div>
     </div>
 
+    <div id="select-area" class="section">
+      <select id="main-select" aria-label="Main select">
+        <option value="alpha" selected>Alpha</option>
+        <option value="beta">Beta</option>
+        <option value="gamma" disabled>Gamma</option>
+        <option value="duplicate">Duplicate</option>
+        <option value="duplicate">Duplicate</option>
+      </select>
+      <span id="select-event-log"></span>
+    </div>
+
     <div class="row">
       <iframe
         id="same-origin-frame"
@@ -109,6 +120,21 @@
       shadowInput.type = "text";
       shadowInput.setAttribute("aria-label", "Shadow text input");
       shadow.appendChild(shadowInput);
+      const shadowSelect = document.createElement("select");
+      shadowSelect.setAttribute("aria-label", "Shadow select");
+      for (const [value, text] of [
+        ["shadow-one", "Shadow One"],
+        ["shadow-two", "Shadow Two"],
+      ]) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = text;
+        if (value === "shadow-one") {
+          option.selected = true;
+        }
+        shadowSelect.appendChild(option);
+      }
+      shadow.appendChild(shadowSelect);
       const innerHost = document.createElement("div");
       shadow.appendChild(innerHost);
       const innerShadow = innerHost.attachShadow({ mode: "open" });
@@ -153,6 +179,13 @@
         shadow.innerHTML = '<div><button id="moved-shadow-action" type="button">Shadow action</button></div>';
       };
 
+      window.__rerenderSelect = () => {
+        const select = document.getElementById("main-select");
+        select.innerHTML =
+          '<option value="alpha" selected>Alpha</option>' +
+          '<option value="replacement">Replacement</option>';
+      };
+
       const countButton = document.getElementById("count-button");
       countButton.addEventListener("click", () => {
         countButton.textContent =
@@ -171,6 +204,14 @@
       for (const type of ["input", "change"]) {
         eventInput.addEventListener(type, () => {
           eventLog.textContent = eventLog.textContent + " " + type + ":" + eventInput.value;
+        });
+      }
+
+      const mainSelect = document.getElementById("main-select");
+      const selectEventLog = document.getElementById("select-event-log");
+      for (const type of ["input", "change"]) {
+        mainSelect.addEventListener(type, () => {
+          selectEventLog.textContent = selectEventLog.textContent + " " + type + ":" + mainSelect.value;
         });
       }
 

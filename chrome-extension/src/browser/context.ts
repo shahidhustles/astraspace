@@ -3,10 +3,13 @@ import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from ".
 import type {
   ClearInputResult,
   ClickResult,
+  GetSelectOptionsResult,
   KeypressInput,
   KeypressResult,
   ScrollInput,
   ScrollResult,
+  SelectOptionIdentity,
+  SelectOptionResult,
   TypeResult,
 } from "./actions/types";
 import type { BrowserError, DiagnosticEvent, GroundedTarget, ObservationResult, TabInfo } from "./types";
@@ -356,6 +359,22 @@ export class BrowserContext {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     return page.scrollToText(text, occurrence);
+  }
+
+  async getSelectOptions(target: GroundedTarget): Promise<GetSelectOptionsResult> {
+    const page = this.pages.get(target.tabId);
+    if (!page) {
+      return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
+    }
+    return page.getSelectOptions(target);
+  }
+
+  async selectOption(target: GroundedTarget, option: SelectOptionIdentity): Promise<SelectOptionResult> {
+    const page = this.pages.get(target.tabId);
+    if (!page) {
+      return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
+    }
+    return page.selectOption(target, option);
   }
 
   async closeTab(tabId: number): Promise<CloseResult> {

@@ -25,6 +25,11 @@
     <p>Frame marker text</p>
     <button id="child-action" type="button">Sibling action</button>
     <input id="child-input" aria-label="Child text input" value="" />
+    <select id="child-select" aria-label="Child select">
+      <option value="child-one" selected>Child One</option>
+      <option value="child-two">Child Two</option>
+      <option value="child-disabled" disabled>Child Disabled</option>
+    </select>
     <div id="child-nested"></div>
     <script>
       const params = new URLSearchParams(location.search);
@@ -35,6 +40,10 @@
       document.getElementById("child-input").setAttribute(
         "aria-label",
         cross ? "Cross-origin text input" : "Child text input",
+      );
+      document.getElementById("child-select").setAttribute(
+        "aria-label",
+        cross ? "Cross-origin select" : "Child select",
       );
       document.body.dataset.version = params.get("v") || "1";
       if (!cross) {

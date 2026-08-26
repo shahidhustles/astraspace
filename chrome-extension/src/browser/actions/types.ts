@@ -12,6 +12,8 @@ export type BrowserActionName =
   | "browser_keypress"
   | "browser_scroll"
   | "browser_scroll_to_text"
+  | "browser_get_select_options"
+  | "browser_select_option"
   | "browser_open_tab"
   | "browser_switch_tab"
   | "browser_close_tab";
@@ -41,6 +43,20 @@ export interface ScrollInput {
   target?: GroundedTarget;
 }
 
+export interface SelectOption {
+  index: number;
+  label: string;
+  value: string;
+  disabled: boolean;
+  selected: boolean;
+}
+
+export interface SelectOptionIdentity {
+  index: number;
+  label: string;
+  value: string;
+}
+
 export type BrowserActionRequest =
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_navigate"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_back"; input: Record<string, never> }
@@ -54,6 +70,16 @@ export type BrowserActionRequest =
       type: typeof BROWSER_ACTION_MESSAGE;
       action: "browser_scroll_to_text";
       input: { text: string; occurrence: number };
+    }
+  | {
+      type: typeof BROWSER_ACTION_MESSAGE;
+      action: "browser_get_select_options";
+      input: GroundedTarget;
+    }
+  | {
+      type: typeof BROWSER_ACTION_MESSAGE;
+      action: "browser_select_option";
+      input: { target: GroundedTarget; index: number; label: string; value: string };
     }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_open_tab"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_switch_tab"; input: { tabId: number } }
@@ -69,6 +95,8 @@ export type BrowserActionData =
   | { kind: "keypress" }
   | { kind: "scroll"; x: number; y: number }
   | { kind: "scroll_to_text"; x: number; y: number }
+  | { kind: "get_select_options"; options: SelectOption[] }
+  | { kind: "select_option"; selectedIndex: number }
   | { kind: "open_tab"; tabs: TabInfo[] | null }
   | { kind: "switch_tab"; tabs: TabInfo[] | null }
   | { kind: "close_tab"; tabs: TabInfo[] | null };
@@ -108,6 +136,26 @@ export interface TextNotFoundError {
   message: string;
 }
 
+export interface NotNativeSelectError {
+  code: "not_native_select";
+  message: string;
+}
+
+export interface OptionNotFoundError {
+  code: "option_not_found";
+  message: string;
+}
+
+export interface OptionDisabledError {
+  code: "option_disabled";
+  message: string;
+}
+
+export interface AmbiguousOptionError {
+  code: "ambiguous_option";
+  message: string;
+}
+
 export interface GroundedTargetError {
   code: "stale_ref" | "target_not_found" | "ambiguous_ref";
   message: string;
@@ -123,6 +171,10 @@ export type BrowserActionError =
   | NotInteractableError
   | FileUploadRequiredError
   | TextNotFoundError
+  | NotNativeSelectError
+  | OptionNotFoundError
+  | OptionDisabledError
+  | AmbiguousOptionError
   | GroundedTargetError;
 
 export type BrowserActionResult =
@@ -158,4 +210,12 @@ export interface ScrollPosition {
 
 export type ScrollResult =
   | { ok: true; url: string; position: ScrollPosition }
+  | { ok: false; error: BrowserActionError };
+
+export type GetSelectOptionsResult =
+  | { ok: true; url: string; options: SelectOption[] }
+  | { ok: false; error: BrowserActionError };
+
+export type SelectOptionResult =
+  | { ok: true; url: string; selectedIndex: number }
   | { ok: false; error: BrowserActionError };
