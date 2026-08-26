@@ -36,6 +36,7 @@ import {
   buildHighlightOverlay,
   buildLabel,
   CAPTURE_ATTRIBUTE,
+  clipToRect,
   clipToViewport,
   OVERLAY_CLASS,
   OVERLAY_CSS,
@@ -43,10 +44,11 @@ import {
   removeHighlightOverlay,
   TARGET_CLASS,
 } from "./capture";
-import { renderPageContent } from "./render";
+import { renderPageContent, toObservedRef } from "./render";
 import type { ObservedRef, ViewportMeasurements } from "./types";
 
-export { enrichPageContentWithAccessibility, readJpegDimensions, renderPageContent };
+export { enrichPageContentWithAccessibility, readJpegDimensions, renderPageContent, toObservedRef };
+export { clipToRect } from "./capture";
 export type {
   CommittedGroundingRecord,
   CommittedObservedRef,
@@ -58,6 +60,7 @@ export type {
   GroundingRecord,
   ObservedRef,
   PathStep,
+  RectBounds,
   ScrollState,
   ViewportCapture,
   ViewportMeasurements,
@@ -103,6 +106,7 @@ const OVERLAY_PREAMBLE = [
   `const BADGE_CLASS = ${JSON.stringify(BADGE_CLASS)};`,
   `const CAPTURE_ATTRIBUTE = ${JSON.stringify(CAPTURE_ATTRIBUTE)};`,
   `const OVERLAY_CSS = ${JSON.stringify(OVERLAY_CSS)};`,
+  clipToRect.toString(),
   clipToViewport.toString(),
   buildLabel.toString(),
   buildHighlightOverlay.toString(),

@@ -5,8 +5,14 @@ import {
   type CommitInput,
   type CommitResult,
 } from "../src/browser/snapshot";
-import type { FrameIdentity } from "../src/browser/document-identity";
-import type { CommittedGroundingRecord, GroundingRecord, ObservedRef, PathStep } from "../src/browser/observation/types";
+import type { FrameIdentity, FrameRecord } from "../src/browser/document-identity";
+import type {
+  CommittedGroundingRecord,
+  FrameLineageStep,
+  GroundingRecord,
+  ObservedRef,
+  PathStep,
+} from "../src/browser/observation/types";
 import type { GroundedTarget, TargetLookupResult } from "../src/browser/types";
 
 function sequencedUuids(): () => string {
@@ -67,6 +73,33 @@ function target(tabId: number, snapshotId: string, ref: number): GroundedTarget 
 }
 
 const LIVE: FrameIdentity = { documentEpoch: 0, navigationEpoch: 0 };
+
+const MAIN = "main";
+const CHILD = "child";
+const SIBLING = "sibling";
+const PARENT = "parent";
+
+function step(frameId: string, parentFrameId: string | null, overrides: Partial<FrameLineageStep> = {}): FrameLineageStep {
+  return { frameId, parentFrameId, documentEpoch: 0, navigationEpoch: 0, ...overrides };
+}
+
+function record(frameId: string, overrides: Partial<FrameRecord> = {}): FrameRecord {
+  return {
+    frameId,
+    parentFrameId: null,
+    loaderId: "L",
+    url: "",
+    documentEpoch: 0,
+    navigationEpoch: 0,
+    ownerBackendNodeId: null,
+    retired: false,
+    ...overrides,
+  };
+}
+
+function graph(records: Record<string, FrameRecord>): (frameId: string) => FrameRecord | null {
+  return (frameId: string) => records[frameId] ?? null;
+}
 
 function expectResolved(result: TargetLookupResult): CommittedGroundingRecord {
   expect(result.ok).toBe(true);
@@ -179,17 +212,23 @@ describe("SnapshotStore", () => {
       [observed(1, "button", { attrs: { type: "submit" } })],
       [grounding(1, path(0), "button", { attrs: { type: "reset" } })],
     );
-    const differentBounds = commit(
-      store,
-      1,
-      [observed(1, "button", { bounds: { x: 1, y: 2, width: 3, height: 4 } })],
-      [grounding(1, path(0), "button", { bounds: { x: 9, y: 2, width: 3, height: 4 } })],
-    );
 
     expect(differentRefSets).toEqual({ ok: false, code: "mismatched_grounding" });
     expect(differentTag).toEqual({ ok: false, code: "mismatched_grounding" });
     expect(differentAttrs).toEqual({ ok: false, code: "mismatched_grounding" });
-    expect(differentBounds).toEqual({ ok: false, code: "mismatched_grounding" });
+  });
+
+  test("commits when public viewport bounds differ from private frame-local bounds", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+
+    const result = commit(
+      store,
+      1,
+      [observed(1, "button", { bounds: { x: 108, y: 58, width: 90, height: 28 } })],
+      [grounding(1, path(0), "button", { bounds: { x: 8, y: 8, width: 90, height: 28 } })],
+    );
+
+    expectCommitted(result);
   });
 
   test("commits a page with no refs", () => {
@@ -310,6 +349,86 @@ describe("SnapshotStore", () => {
       store.lookup(target(1, snapshot.identity.snapshotId, 1), { documentEpoch: 0, navigationEpoch: 0 }),
       target(1, snapshot.identity.snapshotId, 1),
     );
+  });
+
+  test("a child-frame change stales only that target's lineage while main and sibling targets stay eligible", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const main = record(MAIN);
+    const child = record(CHILD, { parentFrameId: MAIN });
+    const sibling = record(SIBLING, { parentFrameId: MAIN });
+    const snapshot = expectCommitted(
+      commit(
+        store,
+        1,
+        [observed(1, "button"), observed(2, "button"), observed(3, "button")],
+        [
+          grounding(1, path(0), "button"),
+          grounding(2, path(0), "button", {
+            frameLineage: [step(MAIN, null), step(CHILD, MAIN)],
+          }),
+          grounding(3, path(0), "button", {
+            frameLineage: [step(MAIN, null), step(SIBLING, MAIN)],
+          }),
+        ],
+      ),
+    );
+    const targetAt = (ref: number) => target(1, snapshot.identity.snapshotId, ref);
+    const live = graph({
+      [MAIN]: main,
+      [CHILD]: { ...child, navigationEpoch: 1 },
+      [SIBLING]: sibling,
+    });
+
+    expectResolved(store.lookup(targetAt(1), LIVE, live));
+    expectStale(store.lookup(targetAt(2), LIVE, live), targetAt(2));
+    expectResolved(store.lookup(targetAt(3), LIVE, live));
+  });
+
+  test("a parent-frame change stales every recorded descendant target", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const main = record(MAIN);
+    const parent = record(PARENT, { parentFrameId: MAIN });
+    const child = record(CHILD, { parentFrameId: PARENT });
+    const snapshot = expectCommitted(
+      commit(
+        store,
+        1,
+        [observed(1, "button"), observed(2, "button"), observed(3, "button")],
+        [
+          grounding(1, path(0), "button"),
+          grounding(2, path(0), "button", {
+            frameLineage: [step(MAIN, null), step(PARENT, MAIN)],
+          }),
+          grounding(3, path(0), "button", {
+            frameLineage: [step(MAIN, null), step(PARENT, MAIN), step(CHILD, PARENT)],
+          }),
+        ],
+      ),
+    );
+    const targetAt = (ref: number) => target(1, snapshot.identity.snapshotId, ref);
+
+    const detached = graph({ [MAIN]: main });
+    expectResolved(store.lookup(targetAt(1), LIVE, detached));
+    expectStale(store.lookup(targetAt(2), LIVE, detached), targetAt(2));
+    expectStale(store.lookup(targetAt(3), LIVE, detached), targetAt(3));
+
+    const navigated = graph({
+      [MAIN]: main,
+      [PARENT]: { ...parent, documentEpoch: 1 },
+      [CHILD]: child,
+    });
+    expectResolved(store.lookup(targetAt(1), LIVE, navigated));
+    expectStale(store.lookup(targetAt(2), LIVE, navigated), targetAt(2));
+    expectStale(store.lookup(targetAt(3), LIVE, navigated), targetAt(3));
+  });
+
+  test("empty-lineage groundings fall back to the main-frame epoch check", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const snapshot = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button", { frameLineage: [] })]));
+    const t = target(1, snapshot.identity.snapshotId, 1);
+
+    expectResolved(store.lookup(t, { documentEpoch: 0, navigationEpoch: 0 }, graph({})));
+    expectStale(store.lookup(t, { documentEpoch: 5, navigationEpoch: 9 }, graph({})), t);
   });
 
   test("committed metadata is frozen and immune to later input mutation", () => {

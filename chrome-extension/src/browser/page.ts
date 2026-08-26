@@ -6,15 +6,17 @@ import {
   type Frame,
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { FrameGraphTracker, type FrameRecord } from "./document-identity";
+import { FrameGraphTracker, lineageStepMatchesLive, type FrameRecord } from "./document-identity";
 import { bindFrameGraph } from "./frame-binding";
 import {
   buildHighlightOverlayExpression,
+  clipToRect,
   enrichPageContentWithAccessibility,
   observePageExpression,
   readJpegDimensions,
   removeHighlightOverlayExpression,
   renderPageContent,
+  toObservedRef,
   type ExtractedFrame,
   type ExtractedFrameContent,
   type ExtractedNode,
@@ -23,10 +25,13 @@ import {
   type GroundingRecord,
   type ObservedRef,
   type PathStep,
+  type RectBounds,
   type ScrollState,
   type ViewportCapture,
+  type ViewportMeasurements,
 } from "./observation";
 import type { OwnerMap } from "./observation/extract";
+import { rectOf } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
@@ -59,10 +64,23 @@ export interface StagedObservation {
   screenshot: ViewportCapture;
   documentEpoch: number;
   navigationEpoch: number;
+  graphVersion: number;
   connectionGeneration: number;
 }
 
 export type StageResult = { ok: true; staged: StagedObservation } | { ok: false; error: BrowserError };
+
+interface FrameOverlay {
+  frame: Frame;
+  refs: ObservedRef[];
+  viewport: ViewportMeasurements;
+}
+
+interface ExtractedFrameTreeResult {
+  content: ExtractedPageContent;
+  nextRef: number;
+  overlays: FrameOverlay[];
+}
 
 export class BrowserPage {
   readonly tabId: number;
@@ -211,10 +229,11 @@ export class BrowserPage {
 
     try {
       const title = await page.title();
-      const content = await this.extractFrameTree();
-      if (!content) {
+      const extracted = await this.extractFrameTree();
+      if (!extracted) {
         return this.failCapture();
       }
+      const { content, overlays } = extracted;
       if (tracker.version !== graphVersionBefore) {
         return this.failCapture();
       }
@@ -225,25 +244,32 @@ export class BrowserPage {
 
       let data: string;
       try {
-        await page.evaluate(buildHighlightOverlayExpression(refs, viewport, captureId));
+        for (const overlay of overlays) {
+          await overlay.frame.evaluate(
+            buildHighlightOverlayExpression(overlay.refs, overlay.viewport, captureId),
+          );
+        }
         data = (await page.screenshot({
           type: "jpeg",
           quality: SCREENSHOT_QUALITY,
           encoding: "base64",
         })) as string;
       } finally {
-        await page.evaluate(removeHighlightOverlayExpression(captureId));
+        const removals = await Promise.allSettled(
+          overlays.map((overlay) =>
+            overlay.frame.evaluate(removeHighlightOverlayExpression(captureId)),
+          ),
+        );
+        if (removals.some((result) => result.status === "rejected")) {
+          throw new Error("Failed to remove observation overlays");
+        }
       }
 
       const finalUrl = page.url();
       if (finalUrl !== url || !enforceUrlPolicy(finalUrl).ok) {
         return this.failCapture();
       }
-      const identityAfter = tracker.identity;
-      if (
-        identityAfter.documentEpoch !== identityBefore.documentEpoch ||
-        identityAfter.navigationEpoch !== identityBefore.navigationEpoch
-      ) {
+      if (tracker.version !== graphVersionBefore) {
         return this.failCapture();
       }
       const screenshotDimensions = readJpegDimensions(data);
@@ -264,6 +290,7 @@ export class BrowserPage {
           screenshot: { mimeType: "image/jpeg", data, ...screenshotDimensions },
           documentEpoch: identityBefore.documentEpoch,
           navigationEpoch: identityBefore.navigationEpoch,
+          graphVersion: graphVersionBefore,
           connectionGeneration: this.connectionGeneration,
         },
       };
@@ -281,6 +308,9 @@ export class BrowserPage {
       staged.tabId !== this.tabId ||
       staged.connectionGeneration !== this.connectionGeneration
     ) {
+      return this.failCapture();
+    }
+    if (tracker.version !== staged.graphVersion || !lineagesMatchLive(staged.groundings, tracker)) {
       return this.failCapture();
     }
     const live = tracker.identity;
@@ -333,7 +363,7 @@ export class BrowserPage {
     this.snapshots.invalidate(this.tabId);
   }
 
-  private async extractFrameTree(): Promise<ExtractedPageContent | null> {
+  private async extractFrameTree(): Promise<{ content: ExtractedPageContent; overlays: FrameOverlay[] } | null> {
     const page = this.puppeteerPage;
     const tracker = this.identityTracker;
     const session = this.session;
@@ -366,7 +396,8 @@ export class BrowserPage {
       const record = tracker.record(frameId);
       return record ? toLineageStep(record) : null;
     });
-    return result.content;
+    assignMainViewportBounds(result.content.root, result.content.viewport);
+    return { content: result.content, overlays: result.overlays };
   }
 
   private failCapture(): { ok: false; error: BrowserError } {
@@ -425,7 +456,7 @@ async function extractFrameRecursive(
   frameById: Map<string, Frame>,
   page: Page,
   startRef: number,
-): Promise<ExtractedFrameContent | null> {
+): Promise<ExtractedFrameTreeResult | null> {
   const owners: OwnerMap = {};
   for (const child of frame.childFrames()) {
     const childId = frameIds.get(child);
@@ -477,6 +508,14 @@ async function extractFrameRecursive(
     }
   });
 
+  const overlays: FrameOverlay[] = [
+    {
+      frame,
+      refs: content.controls.filter((control) => control.ref !== null).map(toObservedRef),
+      viewport: content.viewport,
+    },
+  ];
+
   let nextRef = raw.nextRef;
   for (const placeholder of collectFrameNodes(content.root)) {
     if (!placeholder.frameId) {
@@ -496,11 +535,109 @@ async function extractFrameRecursive(
     if (!childResult) {
       return null;
     }
+
+    let ownerRect: RectBounds | null = null;
+    const owner = await childFrame.frameElement();
+    if (owner) {
+      try {
+        ownerRect = await owner.evaluate(rectOf);
+      } catch {
+        ownerRect = null;
+      } finally {
+        await owner.dispose();
+      }
+    }
+    translateToParentViewport(childResult.content.root, ownerRect, content.viewport);
+
     placeholder.children = childResult.content.root.children;
     nextRef = childResult.nextRef;
+    overlays.push(...childResult.overlays);
   }
 
-  return { content, nextRef };
+  return { content, nextRef, overlays };
+}
+
+function translateToParentViewport(
+  root: ExtractedNode,
+  ownerRect: RectBounds | null,
+  parentViewport: ViewportMeasurements,
+): void {
+  const visibleOwner =
+    ownerRect === null
+      ? null
+      : clipToRect(ownerRect, { x: 0, y: 0, width: parentViewport.width, height: parentViewport.height });
+  const walk = (node: ExtractedNode): void => {
+    if (node.kind === "element") {
+      if (node.ref !== null) {
+        node.viewportBounds = translateBounds(
+          node.viewportBounds === undefined ? node.bounds : node.viewportBounds,
+          ownerRect,
+          visibleOwner,
+        );
+      }
+      for (const child of node.children) {
+        walk(child);
+      }
+      return;
+    }
+    if (node.kind === "frame" || node.kind === "shadow") {
+      for (const child of node.children) {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+}
+
+function translateBounds(
+  bounds: RectBounds | null,
+  ownerRect: RectBounds | null,
+  visibleOwner: RectBounds | null,
+): RectBounds | null {
+  if (bounds === null || ownerRect === null || visibleOwner === null) {
+    return null;
+  }
+  return clipToRect(
+    {
+      x: bounds.x + ownerRect.x,
+      y: bounds.y + ownerRect.y,
+      width: bounds.width,
+      height: bounds.height,
+    },
+    visibleOwner,
+  );
+}
+
+function assignMainViewportBounds(root: ExtractedNode, viewport: ViewportMeasurements): void {
+  const mainRect = { x: 0, y: 0, width: viewport.width, height: viewport.height };
+  const walk = (node: ExtractedNode): void => {
+    if (node.kind === "element") {
+      if (node.ref !== null && node.viewportBounds === undefined && node.bounds !== null) {
+        node.viewportBounds = clipToRect(node.bounds, mainRect);
+      }
+      for (const child of node.children) {
+        walk(child);
+      }
+      return;
+    }
+    if (node.kind === "frame" || node.kind === "shadow") {
+      for (const child of node.children) {
+        walk(child);
+      }
+    }
+  };
+  walk(root);
+}
+
+function lineagesMatchLive(groundings: GroundingRecord[], tracker: FrameGraphTracker): boolean {
+  for (const grounding of groundings) {
+    for (const step of grounding.frameLineage) {
+      if (!lineageStepMatchesLive(step, tracker.record(step.frameId))) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 function collectFrameNodes(root: ExtractedNode, out: ExtractedFrame[] = []): ExtractedFrame[] {

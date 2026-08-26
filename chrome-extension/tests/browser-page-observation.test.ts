@@ -115,6 +115,7 @@ class FakeFrame {
     readonly frameElementHandle: FakeElementHandle | null = null,
     readonly evaluateError: Error | null = null,
     readonly backendNodeIdFor: (el: Element) => number = () => 0,
+    readonly removeOverlayError: Error | null = null,
   ) {}
 
   childFrames(): FakeFrame[] {
@@ -127,6 +128,9 @@ class FakeFrame {
 
   async evaluate(expression: string): Promise<unknown> {
     this.evaluateCalls.push(expression);
+    if (this.removeOverlayError && expression.includes("removeHighlightOverlay")) {
+      throw this.removeOverlayError;
+    }
     if (this.evaluateError) {
       throw this.evaluateError;
     }
@@ -1200,5 +1204,376 @@ describe("BrowserPage.observe", () => {
     expect(state.dom).toContain("<#shadow-root>");
     expect(state.dom).toContain("<frame>");
     expect(state.dom).toContain("[2]<button>Child action />");
+  });
+
+  test("nested-frame public bounds translate through the iframe owner into top-viewport coordinates", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `
+      <button id="main-btn">Main action</button>
+      <iframe id="frame"></iframe>
+    `;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+    Object.defineProperty(iframe, "getBoundingClientRect", {
+      value: () => ({ x: 100, y: 50, width: 300, height: 200 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childCalls: string[] = [];
+    const childFrame = new FakeFrame(
+      childWin,
+      childCalls,
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+    );
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.axSnapshots = [{ role: "button", name: "Main action" }, { role: "button", name: "Child action" }];
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.observe();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.state.refs.map((r) => r.ref)).toEqual([1, 2]);
+    expect(result.state.refs[0].bounds).toEqual({ x: 8, y: 8, width: 90, height: 28 });
+    expect(result.state.refs[1].bounds).toEqual({ x: 108, y: 58, width: 90, height: 28 });
+
+    const childBuild = childCalls.find((call) => call.includes("buildHighlightOverlay"));
+    expect(childBuild).toBeDefined();
+    expect(childBuild).toContain('"x":8');
+    expect(childBuild).not.toContain('"x":108');
+  });
+
+  test("a fully clipped nested control publishes no visible ref", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `
+      <button id="main-btn">Main action</button>
+      <iframe id="frame"></iframe>
+    `;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+    Object.defineProperty(iframe, "getBoundingClientRect", {
+      value: () => ({ x: 900, y: 50, width: 300, height: 200 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childFrame = new FakeFrame(
+      childWin,
+      [],
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+    );
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.axSnapshots = [{ role: "button", name: "Main action" }, { role: "button", name: "Child action" }];
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.observe();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.state.refs.map((r) => r.ref)).toEqual([1, 2]);
+    expect(result.state.refs[0].bounds).toEqual({ x: 8, y: 8, width: 90, height: 28 });
+    expect(result.state.refs[1].bounds).toBeNull();
+  });
+
+  test("installs and removes the per-frame overlay inside the owning frame", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `<button id="main-btn">Main action</button><iframe id="frame"></iframe>`;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childCalls: string[] = [];
+    const childFrame = new FakeFrame(
+      childWin,
+      childCalls,
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+    );
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.axSnapshots = [{ role: "button", name: "Main action" }, { role: "button", name: "Child action" }];
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.observe();
+
+    expect(result.ok).toBe(true);
+    expect(childCalls.filter((call) => call.includes("((doc, refs, viewport, captureId) =>"))).toHaveLength(1);
+    expect(childCalls.filter((call) => call.includes("((doc, captureId) =>"))).toHaveLength(1);
+    expect(page.evaluateCalls.filter((call) => call.includes("((doc, refs, viewport, captureId) =>"))).toHaveLength(1);
+    expect(page.evaluateCalls.filter((call) => call.includes("((doc, captureId) =>"))).toHaveLength(1);
+    expect(childWin.document.querySelector("[data-astra-observation]")).toBeNull();
+    expect(childWin.document.querySelectorAll(".astra-obs-overlay, .astra-obs-target, .astra-obs-badge")).toHaveLength(0);
+    expect(overlayNodes(parentWin.document)).toHaveLength(0);
+  });
+
+  test("an overlay cleanup failure in a child frame fails the observation", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `<button id="main-btn">Main action</button><iframe id="frame"></iframe>`;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childFrame = new FakeFrame(
+      childWin,
+      [],
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+      new Error("child frame cleanup failed"),
+    );
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.axSnapshots = [{ role: "button", name: "Main action" }, { role: "button", name: "Child action" }];
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.observe();
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(overlayNodes(parentWin.document)).toHaveLength(0);
+  });
+
+  test("a child-frame navigation during capture fails the observation", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `<button id="main-btn">Main action</button><iframe id="frame"></iframe>`;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childFrame = new FakeFrame(
+      childWin,
+      [],
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+    );
+    let releaseScreenshot: (() => void) | null = null;
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    page.screenshotGate = new Promise<void>((resolve) => {
+      releaseScreenshot = resolve;
+    });
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const observation = wrapper.observe();
+    while (page.screenshotCalls === 0) {
+      await Promise.resolve();
+    }
+    session.emit("Page.frameNavigated", {
+      frame: { id: CHILD_FRAME_ID, loaderId: "L2b", url: "https://child.test/next" },
+      type: "Navigation",
+    });
+    releaseScreenshot?.();
+    const result = await observation;
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(overlayNodes(parentWin.document)).toHaveLength(0);
+  });
+
+  test("rejects a staged commit when a child frame changes before commit", async () => {
+    const parentWin = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    parentWin.document.body.innerHTML = `<button id="main-btn">Main action</button><iframe id="frame"></iframe>`;
+    const mainButton = parentWin.document.getElementById("main-btn");
+    const iframe = parentWin.document.getElementById("frame");
+    if (!mainButton || !iframe) throw new Error("parent fixture missing");
+    Object.defineProperty(mainButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const childWin = new Window({ url: "https://child.test/", innerWidth: 300, innerHeight: 200 });
+    childWin.document.body.innerHTML = `<button id="child-btn">Child action</button>`;
+    const childButton = childWin.document.getElementById("child-btn");
+    if (!childButton) throw new Error("child fixture missing");
+    Object.defineProperty(childButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const session = new FakeSession();
+    session.frameTree = mainFrameTree([
+      { frame: { id: CHILD_FRAME_ID, parentId: MAIN_FRAME_ID, loaderId: "L2", url: "https://child.test/" } },
+    ]);
+    session.ownerNodes.set(CHILD_FRAME_ID, 101);
+    const childFrame = new FakeFrame(
+      childWin,
+      [],
+      [],
+      new FakeElementHandle(iframe, parentWin, 101),
+      null,
+      () => 201,
+    );
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { page } = fakePage(parentWin, "https://fixture.test/", session, [childFrame]);
+    const deps: PageDeps = {
+      connect: async () => fakeBrowser([page]),
+      connectTab: async () => ({}) as never,
+      timeoutMs: 100,
+      snapshotStore: store,
+    };
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const staged = await wrapper.stageObservation();
+    expect(staged.ok).toBe(true);
+    if (!staged.ok) throw new Error("expected stage");
+
+    session.emit("Page.frameNavigated", {
+      frame: { id: CHILD_FRAME_ID, loaderId: "L2b", url: "https://child.test/next" },
+      type: "Navigation",
+    });
+
+    const committed = wrapper.commitObservation(staged.staged);
+
+    expect(committed).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(
+      store.lookup({ tabId: 7, snapshotId: "snap-1" as SnapshotId, ref: 1 }, { documentEpoch: 0, navigationEpoch: 0 }),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
   });
 });

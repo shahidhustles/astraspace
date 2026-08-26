@@ -225,14 +225,14 @@ function isStructural(el: ExtractedElement): boolean {
   );
 }
 
-function toObservedRef(el: ExtractedElement): ObservedRef {
+export function toObservedRef(el: ExtractedElement): ObservedRef {
   return {
     ref: el.ref as number,
     tag: el.tag,
     role: el.role,
     name: el.name,
     attrs: el.attrs,
-    bounds: el.bounds,
+    bounds: el.viewportBounds === undefined ? el.bounds : el.viewportBounds,
   };
 }
 

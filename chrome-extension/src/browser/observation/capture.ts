@@ -51,15 +51,19 @@ export const OVERLAY_CSS = `
 }
 `;
 
-export function clipToViewport(bounds: RectBounds, width: number, height: number): RectBounds | null {
-  const x = Math.max(0, bounds.x);
-  const y = Math.max(0, bounds.y);
-  const right = Math.min(width, bounds.x + bounds.width);
-  const bottom = Math.min(height, bounds.y + bounds.height);
+export function clipToRect(bounds: RectBounds, rect: RectBounds): RectBounds | null {
+  const x = Math.max(rect.x, bounds.x);
+  const y = Math.max(rect.y, bounds.y);
+  const right = Math.min(rect.x + rect.width, bounds.x + bounds.width);
+  const bottom = Math.min(rect.y + rect.height, bounds.y + bounds.height);
   if (right <= x || bottom <= y) {
     return null;
   }
   return { x, y, width: right - x, height: bottom - y };
+}
+
+export function clipToViewport(bounds: RectBounds, width: number, height: number): RectBounds | null {
+  return clipToRect(bounds, { x: 0, y: 0, width, height });
 }
 
 export function buildHighlightOverlay(

@@ -48,6 +48,7 @@ export interface ExtractedElement {
   interactive: boolean;
   disabled: boolean;
   bounds: RectBounds | null;
+  viewportBounds?: RectBounds | null;
   ref: number | null;
   domPath: PathStep[];
   frameLineage: FrameLineageStep[];

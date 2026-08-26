@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import {
   captureHighlightedViewport,
+  clipToRect,
   clipToViewport,
   readJpegDimensions,
 } from "../src/browser/observation/capture";
@@ -244,6 +245,30 @@ describe("readJpegDimensions", () => {
   test("reads encoded pixel dimensions and rejects invalid image data", () => {
     expect(readJpegDimensions(JPEG_BASE64)).toEqual({ width: 4, height: 4 });
     expect(readJpegDimensions("not a jpeg")).toBeNull();
+  });
+});
+
+describe("clipToRect", () => {
+  test("intersects bounds with an arbitrary rect and returns null when empty", () => {
+    expect(clipToRect({ x: 10, y: 20, width: 100, height: 50 }, { x: 0, y: 0, width: 80, height: 600 })).toEqual({
+      x: 10,
+      y: 20,
+      width: 70,
+      height: 50,
+    });
+    expect(clipToRect({ x: 900, y: 50, width: 300, height: 200 }, { x: 0, y: 0, width: 800, height: 600 })).toBeNull();
+    expect(clipToRect({ x: 10, y: 20, width: 100, height: 50 }, { x: 30, y: 40, width: 50, height: 10 })).toEqual({
+      x: 30,
+      y: 40,
+      width: 50,
+      height: 10,
+    });
+    expect(clipToRect({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 100, height: 100 })).toEqual({
+      x: 5,
+      y: 5,
+      width: 5,
+      height: 5,
+    });
   });
 });
 

@@ -1,4 +1,4 @@
-import type { FrameIdentity } from "./document-identity";
+import { lineageStepMatchesLive, type FrameIdentity, type FrameRecord } from "./document-identity";
 import type {
   CommittedGroundingRecord,
   CommittedObservedRef,
@@ -81,7 +81,11 @@ export class SnapshotStore {
     return { ok: true, snapshot };
   }
 
-  lookup(target: GroundedTarget, live: FrameIdentity): TargetLookupResult {
+  lookup(
+    target: GroundedTarget,
+    live: FrameIdentity,
+    record?: (frameId: string) => FrameRecord | null,
+  ): TargetLookupResult {
     const tab = this.tabs.get(target.tabId);
     if (!tab || !tab.executable) {
       return {
@@ -100,6 +104,26 @@ export class SnapshotStore {
         reason: "The snapshot is not in the executable cache",
       };
     }
+    const grounding = snapshot.groundings.find((entry) => entry.ref === target.ref);
+    if (!grounding) {
+      return {
+        ok: false,
+        code: "target_not_found",
+        target,
+        reason: `Snapshot does not own ref ${target.ref}`,
+      };
+    }
+    if (record && grounding.frameLineage.length > 0) {
+      if (!lineageMatches(grounding.frameLineage, record)) {
+        return {
+          ok: false,
+          code: "stale_ref",
+          target,
+          reason: "The target's frame lineage no longer matches the live page",
+        };
+      }
+      return { ok: true, grounding };
+    }
     if (
       snapshot.identity.documentEpoch !== live.documentEpoch ||
       snapshot.identity.navigationEpoch !== live.navigationEpoch
@@ -109,15 +133,6 @@ export class SnapshotStore {
         code: "stale_ref",
         target,
         reason: "The snapshot's epochs no longer match the live page",
-      };
-    }
-    const grounding = snapshot.groundings.find((record) => record.ref === target.ref);
-    if (!grounding) {
-      return {
-        ok: false,
-        code: "target_not_found",
-        target,
-        reason: `Snapshot does not own ref ${target.ref}`,
       };
     }
     return { ok: true, grounding };
@@ -172,8 +187,7 @@ function recordsAgree(observed: ObservedRef, grounding: GroundingRecord): boolea
     observed.tag === grounding.tag &&
     observed.role === grounding.role &&
     observed.name === grounding.name &&
-    sameAttrs(observed.attrs, grounding.attrs) &&
-    sameBounds(observed.bounds, grounding.bounds)
+    sameAttrs(observed.attrs, grounding.attrs)
   );
 }
 
@@ -185,11 +199,16 @@ function sameAttrs(a: Record<string, string>, b: Record<string, string>): boolea
   return keys.every((key) => b[key] === a[key]);
 }
 
-function sameBounds(a: RectBounds | null, b: RectBounds | null): boolean {
-  if (a === null || b === null) {
-    return a === b;
+function lineageMatches(
+  lineage: readonly FrameLineageStep[],
+  record: (frameId: string) => FrameRecord | null,
+): boolean {
+  for (const step of lineage) {
+    if (!lineageStepMatchesLive(step, record(step.frameId))) {
+      return false;
+    }
   }
-  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  return true;
 }
 
 function freezeObservedRef(record: ObservedRef): CommittedObservedRef {

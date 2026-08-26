@@ -1,8 +1,18 @@
 import type { CDPSession, Protocol } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import type { FrameLineageStep } from "./observation/types";
 
 export interface FrameIdentity {
   readonly documentEpoch: number;
   readonly navigationEpoch: number;
+}
+
+export function lineageStepMatchesLive(step: FrameLineageStep, live: FrameRecord | null): boolean {
+  return (
+    live !== null &&
+    live.parentFrameId === step.parentFrameId &&
+    live.documentEpoch === step.documentEpoch &&
+    live.navigationEpoch === step.navigationEpoch
+  );
 }
 
 export interface FrameRecord {
