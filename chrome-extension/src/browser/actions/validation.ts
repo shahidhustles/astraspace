@@ -3,6 +3,7 @@ import {
   BROWSER_ACTION_MESSAGE,
   type BrowserActionName,
   type BrowserActionRequest,
+  type BrowserScrollMode,
   type InvalidActionError,
   type KeypressInput,
   type KeypressModifiers,
@@ -103,6 +104,26 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
         request: { type: BROWSER_ACTION_MESSAGE, action: "browser_keypress", input: parsed.input },
       };
     }
+    case "browser_scroll": {
+      const parsed = parseScrollInput(message.input);
+      if (!parsed.ok) {
+        return invalid("browser_scroll", parsed.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll", input: parsed.input },
+      };
+    }
+    case "browser_scroll_to_text": {
+      const parsed = parseScrollToTextInput(message.input);
+      if (!parsed.ok) {
+        return invalid("browser_scroll_to_text", parsed.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: parsed.input },
+      };
+    }
     case "browser_open_tab": {
       const url = parseUrlInput(message, "browser_open_tab");
       if (!url.ok) {
@@ -156,7 +177,7 @@ function parseNoInputRequest(
 
 function parseGroundedTarget(
   input: unknown,
-  action: "browser_click" | "browser_type" | "browser_clear_input" | "browser_keypress",
+  action: "browser_click" | "browser_type" | "browser_clear_input" | "browser_keypress" | "browser_scroll",
 ): { ok: true; target: GroundedTarget } | { ok: false; message: string } {
   if (!isRecord(input)) {
     return { ok: false, message: `${action} requires an input object` };
@@ -238,6 +259,76 @@ function parseKeypressModifiers(
       shift: input.shift as boolean,
     },
   };
+}
+
+function parseScrollInput(
+  input: unknown,
+): { ok: true; input: { mode: BrowserScrollMode; target?: GroundedTarget } } | { ok: false; message: string } {
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_scroll requires an input object" };
+  }
+  if (!hasOnlyKeys(input, ["mode", "target"])) {
+    return { ok: false, message: "browser_scroll input has unknown fields" };
+  }
+  const mode = parseScrollMode(input.mode);
+  if (!mode.ok) {
+    return { ok: false, message: mode.message };
+  }
+  if (input.target === undefined) {
+    return { ok: true, input: { mode: mode.mode } };
+  }
+  const target = parseGroundedTarget(input.target, "browser_scroll");
+  if (!target.ok) {
+    return { ok: false, message: target.message };
+  }
+  return { ok: true, input: { mode: mode.mode, target: target.target } };
+}
+
+function parseScrollMode(
+  input: unknown,
+): { ok: true; mode: BrowserScrollMode } | { ok: false; message: string } {
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_scroll requires a mode object" };
+  }
+  if (!hasOnlyKeys(input, ["mode", "percent"])) {
+    return { ok: false, message: "browser_scroll mode has unknown fields" };
+  }
+  const mode = input.mode;
+  if (mode === "page_up" || mode === "page_down" || mode === "top" || mode === "bottom") {
+    if (input.percent !== undefined) {
+      return { ok: false, message: `browser_scroll mode ${mode} takes no percent` };
+    }
+    return { ok: true, mode: { mode } };
+  }
+  if (mode === "percent") {
+    const percent = input.percent;
+    if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 0 || percent > 100) {
+      return { ok: false, message: "browser_scroll percent mode requires an integer percent from 0 through 100" };
+    }
+    return { ok: true, mode: { mode: "percent", percent } };
+  }
+  return { ok: false, message: `Unknown browser_scroll mode: ${String(mode)}` };
+}
+
+function parseScrollToTextInput(
+  input: unknown,
+): { ok: true; input: { text: string; occurrence: number } } | { ok: false; message: string } {
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_scroll_to_text requires an input object" };
+  }
+  if (!hasOnlyKeys(input, ["text", "occurrence"])) {
+    return { ok: false, message: "browser_scroll_to_text input has unknown fields" };
+  }
+  if (typeof input.text !== "string" || input.text.length === 0) {
+    return { ok: false, message: "browser_scroll_to_text requires a non-empty string text" };
+  }
+  if (input.occurrence === undefined) {
+    return { ok: true, input: { text: input.text, occurrence: 1 } };
+  }
+  if (typeof input.occurrence !== "number" || !Number.isInteger(input.occurrence) || input.occurrence <= 0) {
+    return { ok: false, message: "browser_scroll_to_text requires a positive integer occurrence" };
+  }
+  return { ok: true, input: { text: input.text, occurrence: input.occurrence } };
 }
 
 function parseUrlInput(

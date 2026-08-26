@@ -10,9 +10,18 @@ export type BrowserActionName =
   | "browser_type"
   | "browser_clear_input"
   | "browser_keypress"
+  | "browser_scroll"
+  | "browser_scroll_to_text"
   | "browser_open_tab"
   | "browser_switch_tab"
   | "browser_close_tab";
+
+export type BrowserScrollMode =
+  | { mode: "page_up" }
+  | { mode: "page_down" }
+  | { mode: "top" }
+  | { mode: "bottom" }
+  | { mode: "percent"; percent: number };
 
 export interface KeypressModifiers {
   alt: boolean;
@@ -27,6 +36,11 @@ export interface KeypressInput {
   target: GroundedTarget | null;
 }
 
+export interface ScrollInput {
+  mode: BrowserScrollMode;
+  target?: GroundedTarget;
+}
+
 export type BrowserActionRequest =
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_navigate"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_back"; input: Record<string, never> }
@@ -35,6 +49,12 @@ export type BrowserActionRequest =
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_type"; input: { target: GroundedTarget; text: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_clear_input"; input: GroundedTarget }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_keypress"; input: KeypressInput }
+  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_scroll"; input: ScrollInput }
+  | {
+      type: typeof BROWSER_ACTION_MESSAGE;
+      action: "browser_scroll_to_text";
+      input: { text: string; occurrence: number };
+    }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_open_tab"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_switch_tab"; input: { tabId: number } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_close_tab"; input: { tabId: number } };
@@ -47,6 +67,8 @@ export type BrowserActionData =
   | { kind: "type" }
   | { kind: "clear_input" }
   | { kind: "keypress" }
+  | { kind: "scroll"; x: number; y: number }
+  | { kind: "scroll_to_text"; x: number; y: number }
   | { kind: "open_tab"; tabs: TabInfo[] | null }
   | { kind: "switch_tab"; tabs: TabInfo[] | null }
   | { kind: "close_tab"; tabs: TabInfo[] | null };
@@ -81,6 +103,11 @@ export interface FileUploadRequiredError {
   message: string;
 }
 
+export interface TextNotFoundError {
+  code: "text_not_found";
+  message: string;
+}
+
 export interface GroundedTargetError {
   code: "stale_ref" | "target_not_found" | "ambiguous_ref";
   message: string;
@@ -95,6 +122,7 @@ export type BrowserActionError =
   | ReadOnlyTargetError
   | NotInteractableError
   | FileUploadRequiredError
+  | TextNotFoundError
   | GroundedTargetError;
 
 export type BrowserActionResult =
@@ -122,3 +150,12 @@ export type TypeResult = { ok: true; url: string } | { ok: false; error: Browser
 export type ClearInputResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
 
 export type KeypressResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+
+export interface ScrollPosition {
+  x: number;
+  y: number;
+}
+
+export type ScrollResult =
+  | { ok: true; url: string; position: ScrollPosition }
+  | { ok: false; error: BrowserActionError };

@@ -9,6 +9,8 @@ import type {
   ClickResult,
   KeypressInput,
   KeypressResult,
+  ScrollInput,
+  ScrollResult,
   TypeResult,
 } from "./types";
 
@@ -21,6 +23,8 @@ export interface BrowserActionRuntime {
   type: (target: GroundedTarget, text: string) => Promise<TypeResult>;
   clearInput: (target: GroundedTarget) => Promise<ClearInputResult>;
   keypress: (input: KeypressInput) => Promise<KeypressResult>;
+  scroll: (input: ScrollInput) => Promise<ScrollResult>;
+  scrollToText: (text: string, occurrence: number) => Promise<ScrollResult>;
   openTab: (url: string) => Promise<AttachResult>;
   switchTab: (tabId: number) => Promise<AttachResult>;
   closeTab: (tabId: number) => Promise<CloseResult>;
@@ -58,6 +62,10 @@ export async function dispatchBrowserAction(
         );
       case "browser_keypress":
         return await keypressAction(request.input, runtime);
+      case "browser_scroll":
+        return await scrollAction(request.input, runtime);
+      case "browser_scroll_to_text":
+        return await scrollToTextAction(request.input, runtime);
       case "browser_open_tab":
         return await tabLifecycleAction(
           "browser_open_tab",
@@ -159,6 +167,57 @@ async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntim
     url: result.url,
     snapshotInvalidated: true,
     data: { kind: "keypress" },
+  };
+}
+
+async function scrollAction(input: ScrollInput, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
+  const tabId = input.target?.tabId ?? runtime.selectedTabId;
+  if (tabId === null) {
+    return {
+      ok: false,
+      action: "browser_scroll",
+      tabId: null,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    };
+  }
+  const result = await runtime.scroll(input);
+  if (!result.ok) {
+    return { ok: false, action: "browser_scroll", tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action: "browser_scroll",
+    tabId,
+    url: result.url,
+    snapshotInvalidated: true,
+    data: { kind: "scroll", x: result.position.x, y: result.position.y },
+  };
+}
+
+async function scrollToTextAction(
+  input: { text: string; occurrence: number },
+  runtime: BrowserActionRuntime,
+): Promise<BrowserActionResult> {
+  const tabId = runtime.selectedTabId;
+  if (tabId === null) {
+    return {
+      ok: false,
+      action: "browser_scroll_to_text",
+      tabId: null,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    };
+  }
+  const result = await runtime.scrollToText(input.text, input.occurrence);
+  if (!result.ok) {
+    return { ok: false, action: "browser_scroll_to_text", tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action: "browser_scroll_to_text",
+    tabId,
+    url: result.url,
+    snapshotInvalidated: true,
+    data: { kind: "scroll_to_text", x: result.position.x, y: result.position.y },
   };
 }
 

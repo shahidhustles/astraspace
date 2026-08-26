@@ -37,11 +37,14 @@ import { enforceUrlPolicy } from "./url-policy";
 import { clickGroundedTarget } from "./actions/element";
 import { clearGroundedTarget, typeGroundedTarget } from "./actions/input";
 import { keypressGroundedTarget } from "./actions/keyboard";
+import { scrollGroundedTarget, scrollToVisibleText } from "./actions/scroll";
 import type {
   ClearInputResult,
   ClickResult,
   KeypressInput,
   KeypressResult,
+  ScrollInput,
+  ScrollResult,
   TypeResult,
 } from "./actions/types";
 import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
@@ -236,6 +239,24 @@ export class BrowserPage {
       invalidate: () => this.snapshots.invalidate(this.tabId),
       keyboard: () => (this.attached ? (this.puppeteerPage?.keyboard ?? null) : null),
       currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
+  }
+
+  async scroll(input: ScrollInput): Promise<ScrollResult> {
+    return scrollGroundedTarget(input.target ?? null, input.mode, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+      frame: () => this.puppeteerPage?.mainFrame() ?? null,
+    });
+  }
+
+  async scrollToText(text: string, occurrence: number): Promise<ScrollResult> {
+    return scrollToVisibleText(text, occurrence, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+      frame: () => this.puppeteerPage?.mainFrame() ?? null,
     });
   }
 

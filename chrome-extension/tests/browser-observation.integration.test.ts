@@ -1276,3 +1276,285 @@ describe("grounded input and keypress actions in Chrome", () => {
     30_000,
   );
 });
+
+describe("scroll actions in Chrome", () => {
+  const tabId = 5;
+  let browser: Browser;
+  let page: Page;
+  let serverA: ReturnType<typeof Bun.serve>;
+  let serverB: ReturnType<typeof Bun.serve>;
+  let wrapper: BrowserPage;
+  let fixtureUrl: string;
+
+  beforeAll(async () => {
+    const executablePath = requireChromePath();
+    const childHtml = await Bun.file(CHILD_FIXTURE_PATH).text();
+    const grandchildHtml = await Bun.file(GRANDCHILD_FIXTURE_PATH).text();
+
+    serverB = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    const crossOriginUrl = `http://localhost:${serverB.port}/browser-frame-child.html?role=cross`;
+
+    const mainHtml = (await Bun.file(FRAME_FIXTURE_PATH).text()).replace(
+      "{{CROSS_ORIGIN_URL}}",
+      crossOriginUrl,
+    );
+    serverA = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-observation.html")) {
+          return new Response(mainHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    fixtureUrl = `http://127.0.0.1:${serverA.port}/browser-frame-observation.html`;
+
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: true,
+      args: ["--no-sandbox", "--site-per-process"],
+      defaultViewport: {
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      },
+    });
+    [page] = await browser.pages();
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+
+    const deps: PageDeps = {
+      connect: async () => browser,
+      connectTab: async () => ({}) as never,
+      timeoutMs: 10_000,
+    };
+    wrapper = new BrowserPage(tabId, fixtureUrl, deps);
+    const attach = await wrapper.attach();
+    if (!attach.ok) {
+      throw new Error("fixture attach failed");
+    }
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    serverA?.stop(true);
+    serverB?.stop(true);
+  });
+
+  async function observeState(): Promise<BrowserState> {
+    const result = await wrapper.observe();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    return result.state as BrowserState;
+  }
+
+  async function freshPage(): Promise<void> {
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  function refByName(state: BrowserState, name: string): BrowserState["refs"][number] {
+    const ref = state.refs.find((candidate) => candidate.name === name);
+    if (!ref) {
+      throw new Error(`no observed ref named ${name}`);
+    }
+    return ref;
+  }
+
+  function targetFor(state: BrowserState, ref: BrowserState["refs"][number]): GroundedTarget {
+    return { tabId, snapshotId: state.snapshotId, ref: ref.ref };
+  }
+
+  function frameByUrl(urlPart: string): Frame {
+    const frame = page.frames().find((candidate) => candidate.url().includes(urlPart));
+    if (!frame) {
+      throw new Error(`no frame with url containing ${urlPart}`);
+    }
+    return frame;
+  }
+
+  function documentMaxY(): Promise<number> {
+    return page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+  }
+
+  function documentScrollY(): Promise<number> {
+    return page.evaluate(() => window.scrollY);
+  }
+
+  function containerScrollTop(): Promise<number> {
+    return page.evaluate(() => (document.getElementById("scroll-container") as HTMLElement).scrollTop);
+  }
+
+  function containerMaxY(): Promise<number> {
+    return page.evaluate(() => {
+      const container = document.getElementById("scroll-container") as HTMLElement;
+      return container.scrollHeight - container.clientHeight;
+    });
+  }
+
+  async function paragraphVisible(selector: string, index: number): Promise<boolean> {
+    return page.evaluate(
+      ({ selector, index }) => {
+        const p = document.querySelectorAll(selector)[index];
+        const rect = p.getBoundingClientRect();
+        return rect.top < window.innerHeight && rect.bottom > 0;
+      },
+      { selector, index },
+    );
+  }
+
+  test(
+    "scrolls the document by page, to either edge, and to a percentage",
+    async () => {
+      await freshPage();
+      const maxY = await documentMaxY();
+      expect(maxY).toBeGreaterThan(600);
+
+      const down = await wrapper.scroll({ mode: { mode: "page_down" } });
+      expect(down.ok).toBe(true);
+      if (down.ok) {
+        expect(down.position.y).toBe(600);
+      }
+      expect(await documentScrollY()).toBe(600);
+
+      const up = await wrapper.scroll({ mode: { mode: "page_up" } });
+      expect(up.ok).toBe(true);
+      if (up.ok) {
+        expect(up.position.y).toBe(0);
+      }
+
+      const top = await wrapper.scroll({ mode: { mode: "top" } });
+      expect(top.ok).toBe(true);
+      if (top.ok) {
+        expect(top.position.y).toBe(0);
+      }
+
+      const bottom = await wrapper.scroll({ mode: { mode: "bottom" } });
+      expect(bottom.ok).toBe(true);
+      if (bottom.ok) {
+        expect(bottom.position.y).toBe(maxY);
+      }
+      expect(await documentScrollY()).toBe(maxY);
+
+      const half = await wrapper.scroll({ mode: { mode: "percent", percent: 50 } });
+      expect(half.ok).toBe(true);
+      if (half.ok) {
+        expect(half.position.y).toBe(Math.round(maxY * 0.5));
+      }
+      expect(await documentScrollY()).toBe(Math.round(maxY * 0.5));
+    },
+    30_000,
+  );
+
+  test(
+    "scrolls a grounded container through its nearest scrollable ancestor",
+    async () => {
+      await freshPage();
+      await page.evaluate(() => {
+        const container = document.getElementById("scroll-container") as HTMLElement;
+        window.scrollTo(0, Math.max(0, container.offsetTop - 100));
+      });
+      const state = await observeState();
+      const target = targetFor(state, refByName(state, "Container action"));
+
+      const containerMax = await containerMaxY();
+      expect(containerMax).toBeGreaterThan(0);
+
+      const bottom = await wrapper.scroll({ mode: { mode: "bottom" }, target });
+      expect(bottom.ok).toBe(true);
+      expect(await containerScrollTop()).toBe(containerMax);
+
+      const state2 = await observeState();
+      const topTarget = targetFor(state2, refByName(state2, "Container action"));
+      const top = await wrapper.scroll({ mode: { mode: "top" }, target: topTarget });
+      expect(top.ok).toBe(true);
+      expect(await containerScrollTop()).toBe(0);
+
+      const state3 = await observeState();
+      const halfTarget = targetFor(state3, refByName(state3, "Container action"));
+      const half = await wrapper.scroll({ mode: { mode: "percent", percent: 50 }, target: halfTarget });
+      expect(half.ok).toBe(true);
+      if (half.ok) {
+        expect(half.position.y).toBe(Math.round(containerMax * 0.5));
+      }
+      expect(await containerScrollTop()).toBe(Math.round(containerMax * 0.5));
+    },
+    30_000,
+  );
+
+  test(
+    "scrolls to the requested visible-text occurrence in the document, an iframe, and a shadow root",
+    async () => {
+      await freshPage();
+
+      const mainSecond = await wrapper.scrollToText("Scroll marker text", 2);
+      expect(mainSecond.ok).toBe(true);
+      expect(await paragraphVisible("#scroll-document p", 1)).toBe(true);
+
+      const frameSecond = await wrapper.scrollToText("Frame marker text", 2);
+      expect(frameSecond.ok).toBe(true);
+      const iframe = frameByUrl("role=same");
+      const frameVisible = await iframe.evaluate(() => {
+        const p = document.querySelectorAll("p")[2];
+        const rect = p.getBoundingClientRect();
+        return rect.top < window.innerHeight && rect.bottom > 0;
+      });
+      expect(frameVisible).toBe(true);
+
+      const shadowFirst = await wrapper.scrollToText("Shadow marker text", 1);
+      expect(shadowFirst.ok).toBe(true);
+      const shadowVisible = await page.evaluate(() => {
+        const host = document.getElementById("shadow-host");
+        const p = host.shadowRoot.querySelector("p");
+        const rect = p.getBoundingClientRect();
+        return rect.top < window.innerHeight && rect.bottom > 0;
+      });
+      expect(shadowVisible).toBe(true);
+
+      const quoted = await wrapper.scrollToText(`It’s “quoted” with [data-x="y"] syntax.`, 1);
+      expect(quoted.ok).toBe(true);
+      expect(await paragraphVisible("#scroll-document p", 3)).toBe(true);
+    },
+    30_000,
+  );
+
+  test(
+    "returns typed failures for a non-scrollable target and missing text",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const mainTarget = targetFor(state, refByName(state, "Main action"));
+
+      const notScrollable = await wrapper.scroll({ mode: { mode: "bottom" }, target: mainTarget });
+      expect(notScrollable).toEqual({
+        ok: false,
+        error: { code: "action_failed", message: "Target has no scrollable ancestor" },
+      });
+
+      const missing = await wrapper.scrollToText("no such text anywhere on this page", 1);
+      expect(missing).toEqual({
+        ok: false,
+        error: { code: "text_not_found", message: expect.stringContaining("occurrence 1") },
+      });
+    },
+    30_000,
+  );
+});

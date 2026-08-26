@@ -5,6 +5,8 @@ import type {
   ClickResult,
   KeypressInput,
   KeypressResult,
+  ScrollInput,
+  ScrollResult,
   TypeResult,
 } from "./actions/types";
 import type { BrowserError, DiagnosticEvent, GroundedTarget, ObservationResult, TabInfo } from "./types";
@@ -328,6 +330,32 @@ export class BrowserContext {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     return page.keypress(input);
+  }
+
+  async scroll(input: ScrollInput): Promise<ScrollResult> {
+    if (input.target) {
+      const page = this.pages.get(input.target.tabId);
+      if (!page) {
+        return {
+          ok: false,
+          error: { code: "stale_ref", message: "No page connection for this tab", target: input.target },
+        };
+      }
+      return page.scroll(input);
+    }
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.scroll(input);
+  }
+
+  async scrollToText(text: string, occurrence: number): Promise<ScrollResult> {
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.scrollToText(text, occurrence);
   }
 
   async closeTab(tabId: number): Promise<CloseResult> {

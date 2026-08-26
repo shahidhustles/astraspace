@@ -24,6 +24,20 @@
       .section {
         margin: 10px 0;
       }
+      .scroll-spacer {
+        height: 1400px;
+      }
+      .scroll-container {
+        width: 320px;
+        height: 140px;
+        overflow-y: auto;
+        border: 1px solid #999;
+        margin: 10px 0;
+      }
+      #container-action {
+        position: sticky;
+        top: 0;
+      }
     </style>
   </head>
   <body>
@@ -68,6 +82,22 @@
       <iframe id="cross-origin-frame" src="{{CROSS_ORIGIN_URL}}" width="380" height="170"></iframe>
     </div>
 
+    <div id="scroll-document" class="section">
+      <h2>Scroll document section</h2>
+      <p>Scroll marker text</p>
+      <p>Scroll marker text</p>
+      <p>Scroll marker text</p>
+      <p>It&rsquo;s &ldquo;quoted&rdquo; with [data-x=&quot;y&quot;] syntax.</p>
+    </div>
+
+    <div id="scroll-container" class="scroll-container">
+      <p>Container marker text</p>
+      <button id="container-action" type="button">Container action</button>
+      <div class="scroll-spacer"></div>
+    </div>
+
+    <div class="scroll-spacer"></div>
+
     <script>
       const shadowHost = document.getElementById("shadow-host");
       const shadow = shadowHost.attachShadow({ mode: "open" });
@@ -86,6 +116,10 @@
       innerButton.type = "button";
       innerButton.textContent = "Nested shadow action";
       innerShadow.appendChild(innerButton);
+
+      const shadowMarker = document.createElement("p");
+      shadowMarker.textContent = "Shadow marker text";
+      shadow.appendChild(shadowMarker);
 
       const closedHost = document.getElementById("closed-host");
       const closed = closedHost.attachShadow({ mode: "closed" });
