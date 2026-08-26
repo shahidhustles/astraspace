@@ -37,6 +37,13 @@
       <button id="rerender-button" type="button">Rerender action</button>
     </div>
 
+    <div id="interaction-area" class="section">
+      <button id="count-button" type="button">Count action</button>
+      <button id="disabled-button" type="button" disabled>Disabled action</button>
+      <input id="file-input" type="file" />
+      <a id="new-tab-link" href="browser-frame-child.html?role=newtab" target="_blank">New tab action</a>
+    </div>
+
     <div class="row">
       <iframe
         id="same-origin-frame"
@@ -93,6 +100,19 @@
         }
         shadow.innerHTML = '<div><button id="moved-shadow-action" type="button">Shadow action</button></div>';
       };
+
+      const countButton = document.getElementById("count-button");
+      countButton.addEventListener("click", () => {
+        countButton.textContent =
+          "Count action " + (Number(countButton.dataset.count ?? 0) + 1);
+        countButton.dataset.count = String(Number(countButton.dataset.count ?? 0) + 1);
+      });
+
+      shadowButton.addEventListener("click", () => {
+        shadowButton.textContent =
+          "Shadow action " + (Number(shadowButton.dataset.count ?? 0) + 1);
+        shadowButton.dataset.count = String(Number(shadowButton.dataset.count ?? 0) + 1);
+      });
     </script>
   </body>
 </html>

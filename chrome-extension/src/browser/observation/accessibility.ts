@@ -76,6 +76,7 @@ export function inputRole(type: string | null): string {
     case "submit":
     case "reset":
     case "image":
+    case "file":
       return "button";
     case "checkbox":
       return "checkbox";

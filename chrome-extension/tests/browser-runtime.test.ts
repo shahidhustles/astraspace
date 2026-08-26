@@ -5,7 +5,13 @@ import {
   OBSERVE_SELECTED_TAB_MESSAGE,
   type BrowserRuntime,
 } from "../src/browser/runtime";
-import type { BrowserState } from "../src/browser/types";
+import type { BrowserState, GroundedTarget } from "../src/browser/types";
+
+const STALE_TARGET: GroundedTarget = {
+  tabId: 7,
+  snapshotId: "snap-9" as GroundedTarget["snapshotId"],
+  ref: 1,
+};
 
 const OBSERVED_STATE: BrowserState = {
   tabId: 7,
@@ -58,6 +64,11 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     navigate: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
     goBack: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
     refresh: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
+    click: async () => ({ ok: false, error: { code: "stale_ref", message: "not used", target: STALE_TARGET } }),
+    openTab: async () => ({ ok: false, error: { code: "chrome_api_error", message: "not used" } }),
+    switchTab: async () => ({ ok: false, error: { code: "missing_tab", message: "not used" } }),
+    closeTab: async () => ({ ok: false, error: { code: "missing_tab", message: "not used" } }),
+    listTabs: async () => ({ ok: true, tabs: [] }),
     ...overrides,
   };
 }

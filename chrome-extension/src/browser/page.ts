@@ -34,6 +34,8 @@ import type { OwnerMap } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
+import { clickGroundedTarget } from "./actions/element";
+import type { ClickResult } from "./actions/types";
 import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
@@ -44,6 +46,7 @@ export interface PageDeps {
   connectTab: (tabId: number) => Promise<ExtensionTransport>;
   timeoutMs: number;
   snapshotStore?: SnapshotStore;
+  onCreated?: (listener: (tab: chrome.tabs.Tab) => void) => () => void;
 }
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
@@ -192,6 +195,15 @@ export class BrowserPage {
 
   async reload(): Promise<NavResult> {
     return this.runNavigation((page) => page.reload(this.navOptions()));
+  }
+
+  async click(target: GroundedTarget): Promise<ClickResult> {
+    return clickGroundedTarget(target, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      onCreated: (listener) => this.deps.onCreated?.(listener) ?? (() => {}),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
   }
 
   observe(): Promise<ObserveResult> {
@@ -771,4 +783,8 @@ const defaultDeps: PageDeps = {
   connect,
   connectTab: (tabId) => ExtensionTransport.connectTab(tabId),
   timeoutMs: DEFAULT_NAVIGATION_TIMEOUT_MS,
+  onCreated: (listener) => {
+    chrome.tabs.onCreated.addListener(listener);
+    return () => chrome.tabs.onCreated.removeListener(listener);
+  },
 };

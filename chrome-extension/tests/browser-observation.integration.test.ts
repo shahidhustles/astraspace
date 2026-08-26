@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import puppeteer, { type Browser, type Frame, type Page } from "puppeteer-core";
+import puppeteer, { type Browser, type Frame, type Page, type Target } from "puppeteer-core";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
 import type { BrowserState, GroundedTarget } from "../src/browser/types";
 
@@ -727,6 +727,221 @@ describe("frame-aware observation in Chrome", () => {
       if (!duplicateShadow.ok) {
         expect(duplicateShadow.code).toBe("ambiguous_ref");
       }
+    },
+    30_000,
+  );
+});
+
+describe("grounded clicking in Chrome", () => {
+  const tabId = 3;
+  let browser: Browser;
+  let page: Page;
+  let serverA: ReturnType<typeof Bun.serve>;
+  let serverB: ReturnType<typeof Bun.serve>;
+  let wrapper: BrowserPage;
+  let fixtureUrl: string;
+  let crossOriginUrl: string;
+  let observedTabIds: number[];
+
+  beforeAll(async () => {
+    const executablePath = requireChromePath();
+    const childHtml = await Bun.file(CHILD_FIXTURE_PATH).text();
+    const grandchildHtml = await Bun.file(GRANDCHILD_FIXTURE_PATH).text();
+
+    serverB = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    crossOriginUrl = `http://localhost:${serverB.port}/browser-frame-child.html?role=cross`;
+
+    const mainHtml = (await Bun.file(FRAME_FIXTURE_PATH).text()).replace(
+      "{{CROSS_ORIGIN_URL}}",
+      crossOriginUrl,
+    );
+    serverA = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-observation.html")) {
+          return new Response(mainHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    fixtureUrl = `http://127.0.0.1:${serverA.port}/browser-frame-observation.html`;
+
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: true,
+      args: ["--no-sandbox", "--site-per-process"],
+      defaultViewport: {
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      },
+    });
+    [page] = await browser.pages();
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+
+    observedTabIds = [];
+    browser.on("targetcreated", (target: Target) => {
+      if (target?.targetId) {
+        observedTabIds.push(Number(target.targetId.split(":").at(-1)));
+      } else {
+        observedTabIds.push(observedTabIds.length);
+      }
+    });
+    const deps: PageDeps = {
+      connect: async () => browser,
+      connectTab: async () => ({}) as never,
+      timeoutMs: 10_000,
+    };
+    wrapper = new BrowserPage(tabId, fixtureUrl, deps);
+    const attach = await wrapper.attach();
+    if (!attach.ok) {
+      throw new Error("fixture attach failed");
+    }
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    serverA?.stop(true);
+    serverB?.stop(true);
+  });
+
+  async function observeState(): Promise<BrowserState> {
+    const result = await wrapper.observe();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    return result.state as BrowserState;
+  }
+
+  async function freshPage(): Promise<void> {
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function refByName(state: BrowserState, name: string): BrowserState["refs"][number] {
+    const ref = state.refs.find((candidate) => candidate.name === name);
+    if (!ref) {
+      throw new Error(`no observed ref named ${name}`);
+    }
+    return ref;
+  }
+
+  function targetFor(state: BrowserState, ref: BrowserState["refs"][number]): GroundedTarget {
+    return { tabId, snapshotId: state.snapshotId, ref: ref.ref };
+  }
+
+  test(
+    "clicks grounded buttons in the main document and an open shadow root",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+
+      const mainResult = await wrapper.click(targetFor(state, refByName(state, "Count action")));
+      expect(mainResult).toEqual({ ok: true, url: fixtureUrl, newTabId: null });
+      const countText = await page.evaluate(
+        () => document.getElementById("count-button")?.textContent,
+      );
+      expect(countText).toBe("Count action 1");
+
+      const stateAfterMain = await observeState();
+      const shadowResult = await wrapper.click(
+        targetFor(stateAfterMain, refByName(stateAfterMain, "Shadow action")),
+      );
+      expect(shadowResult.ok).toBe(true);
+      const shadowText = await page.evaluate(() => {
+        const host = document.getElementById("shadow-host");
+        const buttons = host?.shadowRoot?.querySelectorAll("button") ?? [];
+        return [...buttons].map((node) => node.textContent);
+      });
+      expect(shadowText[0]).toBe("Shadow action 1");
+
+      const after = await observeState();
+      expect(refByName(after, "Count action 1")).toBeDefined();
+      expect(refByName(after, "Shadow action 1")).toBeDefined();
+      expect(JSON.parse(JSON.stringify(shadowResult))).toEqual(shadowResult);
+    },
+    30_000,
+  );
+
+  test(
+    "clicks a grounded button inside a cross-origin iframe",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.click(targetFor(state, refByName(state, "Cross-origin action")));
+      expect(result).toEqual({ ok: true, url: fixtureUrl, newTabId: null });
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a target disabled after the observation without clicking it",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      await page.evaluate(() => {
+        (document.getElementById("count-button") as HTMLButtonElement).disabled = true;
+      });
+      const result = await wrapper.click(targetFor(state, refByName(state, "Count action")));
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "disabled_target", message: "Element is disabled" },
+      });
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a grounded file input without opening a picker",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const fileRef = state.refs.find((ref) => ref.tag === "input" && ref.attrs.type === "file");
+      expect(fileRef).toBeDefined();
+      if (!fileRef) throw new Error("no file input ref");
+      const result = await wrapper.click(targetFor(state, fileRef));
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "file_upload_required", message: "File upload is not supported" },
+      });
+    },
+    30_000,
+  );
+
+  test(
+    "a grounded click on a new-tab link opens a real tab",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.click(targetFor(state, refByName(state, "New tab action")));
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected success");
+      const deadline = Date.now() + 5_000;
+      while ((await browser.pages()).length < 2 && Date.now() < deadline) {
+        await sleep(50);
+      }
+      expect((await browser.pages()).length).toBe(2);
+      expect(observedTabIds.length).toBeGreaterThan(0);
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     },
     30_000,
   );

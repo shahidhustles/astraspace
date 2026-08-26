@@ -1,6 +1,7 @@
 import { enforceUrlPolicy } from "./url-policy";
 import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
-import type { BrowserError, DiagnosticEvent, ObservationResult, TabInfo } from "./types";
+import type { ClickResult } from "./actions/types";
+import type { BrowserError, DiagnosticEvent, GroundedTarget, ObservationResult, TabInfo } from "./types";
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
 
@@ -279,6 +280,14 @@ export class BrowserContext {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     return page.reload();
+  }
+
+  async click(target: GroundedTarget): Promise<ClickResult> {
+    const page = this.pages.get(target.tabId);
+    if (!page) {
+      return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
+    }
+    return page.click(target);
   }
 
   async closeTab(tabId: number): Promise<CloseResult> {
