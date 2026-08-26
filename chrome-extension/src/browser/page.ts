@@ -19,8 +19,9 @@ import {
   type ViewportCapture,
 } from "./observation";
 import { SnapshotStore } from "./snapshot";
+import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
-import type { BrowserError, ObserveResult, UrlPolicyResult } from "./types";
+import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
 const SCREENSHOT_QUALITY = 85;
@@ -297,6 +298,13 @@ export class BrowserPage {
         navigationEpoch: identity.navigationEpoch,
       },
     };
+  }
+
+  async resolveTarget(target: GroundedTarget): Promise<TargetResolutionResult> {
+    if (!this.attached || !this.puppeteerPage || !this.identityTracker) {
+      return { ok: false, code: "stale_ref", target, reason: "No selected live connection" };
+    }
+    return resolveTarget(this.puppeteerPage, this.snapshots, target, this.identityTracker.identity);
   }
 
   private failCapture(): { ok: false; error: BrowserError } {

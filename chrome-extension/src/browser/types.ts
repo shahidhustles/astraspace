@@ -1,3 +1,4 @@
+import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { GroundingRecord, ObservedRef, ScrollState, ViewportCapture } from "./observation/types";
 
 export interface InvalidUrlError {
@@ -111,6 +112,12 @@ export type TargetLookupFailureCode = "stale_ref" | "target_not_found";
 export type TargetLookupResult =
   | { ok: true; grounding: GroundingRecord }
   | { ok: false; code: TargetLookupFailureCode; target: GroundedTarget; reason: string };
+
+export type TargetResolutionFailureCode = "stale_ref" | "target_not_found" | "ambiguous_ref";
+
+export type TargetResolutionResult =
+  | { ok: true; element: ElementHandle }
+  | { ok: false; code: TargetResolutionFailureCode; target: GroundedTarget; reason: string };
 
 export type BrowserError =
   | InvalidUrlError
