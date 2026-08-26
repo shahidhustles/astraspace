@@ -17,10 +17,10 @@ const OBSERVED_STATE: BrowserState = {
   dom: "[1]<a href=https://example.com>Example</a>",
   refs: [{ ref: 1, tag: "a", role: "link", name: "Example", attrs: {}, bounds: null }],
   screenshot: { mimeType: "image/jpeg", data: "base64", width: 800, height: 600 },
-  snapshotId: "snap-1" as BrowserState["snapshotId"],
-  snapshotVersion: 1,
-  documentEpoch: 0,
-  navigationEpoch: 0,
+  snapshotId: "snap-9" as BrowserState["snapshotId"],
+  snapshotVersion: 3,
+  documentEpoch: 2,
+  navigationEpoch: 4,
 };
 
 describe("browser runtime messages", () => {
@@ -63,6 +63,14 @@ describe("browser runtime messages", () => {
     expect(result).toEqual({ ok: true, state: OBSERVED_STATE });
     expect(observeCalls).toBe(1);
     expect(attachCalls).toBe(0);
+
+    if (result && "state" in result) {
+      expect(result.state.snapshotId).toBe("snap-9");
+      expect(result.state.snapshotVersion).toBe(3);
+      expect(result.state.documentEpoch).toBe(2);
+      expect(result.state.navigationEpoch).toBe(4);
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    }
   });
 
   test("unrelated extension messages are ignored", async () => {

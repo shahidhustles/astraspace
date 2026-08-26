@@ -273,4 +273,42 @@ describe("live viewport synchronization", () => {
     },
     30_000,
   );
+
+  test(
+    "consecutive snapshots reuse numeric refs without sharing snapshot identity",
+    async () => {
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const first = await observeCollectingLabels();
+      expect(first.result.ok).toBe(true);
+      if (!first.result.ok) throw new Error("expected success");
+
+      const second = await observeCollectingLabels();
+      expect(second.result.ok).toBe(true);
+      if (!second.result.ok) throw new Error("expected success");
+
+      const a = first.result.state;
+      const b = second.result.state;
+
+      expect(a.refs.map((ref) => ref.ref)).toEqual([1, 2, 3, 4]);
+      expect(b.refs.map((ref) => ref.ref)).toEqual(a.refs.map((ref) => ref.ref));
+      expect(b.dom).toBe(a.dom);
+      expect(b.screenshot.data).toBe(a.screenshot.data);
+      expect(first.labels).toEqual([a.refs.map((ref) => ref.ref)]);
+      expect(second.labels).toEqual([b.refs.map((ref) => ref.ref)]);
+
+      expect(b.snapshotId).not.toBe(a.snapshotId);
+      expect(b.snapshotVersion).toBe(a.snapshotVersion + 1);
+      expect(a.documentEpoch).toBe(0);
+      expect(a.navigationEpoch).toBe(0);
+      expect(b.documentEpoch).toBe(a.documentEpoch);
+      expect(b.navigationEpoch).toBe(a.navigationEpoch);
+
+      expect(JSON.parse(JSON.stringify(first.result))).toEqual(first.result);
+      expect(JSON.parse(JSON.stringify(second.result))).toEqual(second.result);
+      expect(await overlayCount()).toBe(0);
+    },
+    30_000,
+  );
 });
