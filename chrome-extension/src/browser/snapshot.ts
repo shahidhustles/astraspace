@@ -1,5 +1,6 @@
+import type { FrameIdentity } from "./document-identity";
 import type { GroundingRecord, ObservedRef, RectBounds } from "./observation/types";
-import type { GroundedTarget, SnapshotId, SnapshotIdentity } from "./types";
+import type { GroundedTarget, SnapshotId, SnapshotIdentity, TargetLookupResult } from "./types";
 
 export interface SnapshotStoreDeps {
   createUuid: () => string;
@@ -30,7 +31,10 @@ export type CommitResult =
 interface TabSnapshotState {
   nextVersion: number;
   snapshots: Map<SnapshotId, CommittedSnapshot>;
+  executable: boolean;
 }
+
+const MAX_RETAINED_SNAPSHOTS = 8;
 
 export class SnapshotStore {
   private readonly tabs = new Map<number, TabSnapshotState>();
@@ -61,18 +65,64 @@ export class SnapshotStore {
     });
     tab.snapshots.set(snapshotId, snapshot);
     tab.nextVersion += 1;
+    tab.executable = true;
+    if (tab.snapshots.size > MAX_RETAINED_SNAPSHOTS) {
+      const oldest = tab.snapshots.keys().next().value as SnapshotId;
+      tab.snapshots.delete(oldest);
+    }
     return { ok: true, snapshot };
   }
 
-  lookup(target: GroundedTarget): GroundingRecord | undefined {
-    const snapshot = this.tabs.get(target.tabId)?.snapshots.get(target.snapshotId);
-    return snapshot?.groundings.find((grounding) => grounding.ref === target.ref);
+  lookup(target: GroundedTarget, live: FrameIdentity): TargetLookupResult {
+    const tab = this.tabs.get(target.tabId);
+    if (!tab || !tab.executable) {
+      return {
+        ok: false,
+        code: "stale_ref",
+        target,
+        reason: tab ? "The tab's snapshot cache is invalidated" : "No snapshots for this tab",
+      };
+    }
+    const snapshot = tab.snapshots.get(target.snapshotId);
+    if (!snapshot) {
+      return {
+        ok: false,
+        code: "stale_ref",
+        target,
+        reason: "The snapshot is not in the executable cache",
+      };
+    }
+    if (
+      snapshot.identity.documentEpoch !== live.documentEpoch ||
+      snapshot.identity.navigationEpoch !== live.navigationEpoch
+    ) {
+      return {
+        ok: false,
+        code: "stale_ref",
+        target,
+        reason: "The snapshot's epochs no longer match the live page",
+      };
+    }
+    const grounding = snapshot.groundings.find((record) => record.ref === target.ref);
+    if (!grounding) {
+      return {
+        ok: false,
+        code: "target_not_found",
+        target,
+        reason: `Snapshot does not own ref ${target.ref}`,
+      };
+    }
+    return { ok: true, grounding };
+  }
+
+  invalidate(tabId: number): void {
+    this.tabState(tabId).executable = false;
   }
 
   private tabState(tabId: number): TabSnapshotState {
     let tab = this.tabs.get(tabId);
     if (!tab) {
-      tab = { nextVersion: 1, snapshots: new Map() };
+      tab = { nextVersion: 1, snapshots: new Map(), executable: true };
       this.tabs.set(tabId, tab);
     }
     return tab;

@@ -5,8 +5,9 @@ import {
   type CommitInput,
   type CommitResult,
 } from "../src/browser/snapshot";
+import type { FrameIdentity } from "../src/browser/document-identity";
 import type { GroundingRecord, ObservedRef } from "../src/browser/observation/types";
-import type { GroundedTarget } from "../src/browser/types";
+import type { GroundedTarget, TargetLookupResult } from "../src/browser/types";
 
 function sequencedUuids(): () => string {
   let next = 0;
@@ -44,6 +45,18 @@ function expectCommitted(result: CommitResult): CommittedSnapshot {
 
 function target(tabId: number, snapshotId: string, ref: number): GroundedTarget {
   return { tabId, snapshotId: snapshotId as GroundedTarget["snapshotId"], ref };
+}
+
+const LIVE: FrameIdentity = { documentEpoch: 0, navigationEpoch: 0 };
+
+function expectResolved(result: TargetLookupResult): GroundingRecord {
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error("expected success");
+  return result.grounding;
+}
+
+function expectStale(result: TargetLookupResult, targetValue: GroundedTarget): void {
+  expect(result).toEqual({ ok: false, code: "stale_ref", target: targetValue, reason: expect.any(String) });
 }
 
 describe("SnapshotStore", () => {
@@ -190,25 +203,94 @@ describe("SnapshotStore", () => {
       ),
     );
 
-    const fromFirst = store.lookup(target(1, first.identity.snapshotId, 1));
-    const fromSecond = store.lookup(target(1, second.identity.snapshotId, 1));
+    const fromFirst = expectResolved(store.lookup(target(1, first.identity.snapshotId, 1), LIVE));
+    const fromSecond = expectResolved(store.lookup(target(1, second.identity.snapshotId, 1), LIVE));
 
-    expect(fromFirst?.domPath).toEqual([3, 1]);
-    expect(fromFirst?.tag).toBe("button");
-    expect(fromFirst?.attrs).toEqual({ type: "submit" });
-    expect(fromSecond?.domPath).toEqual([7, 0]);
-    expect(fromSecond?.tag).toBe("a");
-    expect(fromSecond?.attrs).toEqual({ href: "https://example.com" });
+    expect(fromFirst.domPath).toEqual([3, 1]);
+    expect(fromFirst.tag).toBe("button");
+    expect(fromFirst.attrs).toEqual({ type: "submit" });
+    expect(fromSecond.domPath).toEqual([7, 0]);
+    expect(fromSecond.tag).toBe("a");
+    expect(fromSecond.attrs).toEqual({ href: "https://example.com" });
   });
 
   test("lookup never falls back to another snapshot, tab, or ref", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
     const snapshot = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
 
-    expect(store.lookup(target(1, snapshot.identity.snapshotId, 1))).toBeDefined();
-    expect(store.lookup(target(1, "snap-unknown", 1))).toBeUndefined();
-    expect(store.lookup(target(2, snapshot.identity.snapshotId, 1))).toBeUndefined();
-    expect(store.lookup(target(1, snapshot.identity.snapshotId, 99))).toBeUndefined();
+    const resolved = expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), LIVE));
+    expect(resolved.domPath).toEqual([0]);
+
+    expectStale(store.lookup(target(1, "snap-unknown", 1), LIVE), target(1, "snap-unknown", 1));
+    expectStale(store.lookup(target(2, snapshot.identity.snapshotId, 1), LIVE), target(2, snapshot.identity.snapshotId, 1));
+
+    const missing = store.lookup(target(1, snapshot.identity.snapshotId, 99), LIVE);
+    expect(missing).toEqual({
+      ok: false,
+      code: "target_not_found",
+      target: target(1, snapshot.identity.snapshotId, 99),
+      reason: expect.any(String),
+    });
+  });
+
+  test("evicts the ninth older snapshot and keeps the eight retained snapshots available", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const committed: CommittedSnapshot[] = [];
+    for (let i = 0; i < 9; i += 1) {
+      committed.push(expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")])));
+    }
+
+    expectStale(store.lookup(target(1, committed[0].identity.snapshotId, 1), LIVE), target(1, committed[0].identity.snapshotId, 1));
+    for (const snapshot of committed.slice(1)) {
+      expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), LIVE));
+    }
+  });
+
+  test("invalidate disables the entire executable cache until a fresh commit", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const first = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    const second = expectCommitted(commit(store, 1, [observed(1, "a")], [grounding(1, [0], "a")]));
+
+    store.invalidate(1);
+
+    expectStale(store.lookup(target(1, first.identity.snapshotId, 1), LIVE), target(1, first.identity.snapshotId, 1));
+    expectStale(store.lookup(target(1, second.identity.snapshotId, 1), LIVE), target(1, second.identity.snapshotId, 1));
+
+    const third = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    expectResolved(store.lookup(target(1, third.identity.snapshotId, 1), LIVE));
+    expectResolved(store.lookup(target(1, second.identity.snapshotId, 1), LIVE));
+  });
+
+  test("invalidate on a tab without snapshots also blocks lookups", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+
+    store.invalidate(1);
+
+    expectStale(store.lookup(target(1, "snap-unknown", 1), LIVE), target(1, "snap-unknown", 1));
+  });
+
+  test("compares document and navigation epochs before returning a record", () => {
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const snapshot = expectCommitted(
+      commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")], {
+        documentEpoch: 2,
+        navigationEpoch: 3,
+      }),
+    );
+
+    expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), { documentEpoch: 2, navigationEpoch: 3 }));
+    expectStale(
+      store.lookup(target(1, snapshot.identity.snapshotId, 1), { documentEpoch: 3, navigationEpoch: 3 }),
+      target(1, snapshot.identity.snapshotId, 1),
+    );
+    expectStale(
+      store.lookup(target(1, snapshot.identity.snapshotId, 1), { documentEpoch: 2, navigationEpoch: 4 }),
+      target(1, snapshot.identity.snapshotId, 1),
+    );
+    expectStale(
+      store.lookup(target(1, snapshot.identity.snapshotId, 1), { documentEpoch: 0, navigationEpoch: 0 }),
+      target(1, snapshot.identity.snapshotId, 1),
+    );
   });
 
   test("committed metadata is frozen and immune to later input mutation", () => {

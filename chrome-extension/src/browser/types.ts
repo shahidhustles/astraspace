@@ -1,4 +1,4 @@
-import type { ObservedRef, ScrollState, ViewportCapture } from "./observation/types";
+import type { GroundingRecord, ObservedRef, ScrollState, ViewportCapture } from "./observation/types";
 
 export interface InvalidUrlError {
   code: "invalid_url";
@@ -105,6 +105,12 @@ export interface GroundedTarget {
   snapshotId: SnapshotId;
   ref: number;
 }
+
+export type TargetLookupFailureCode = "stale_ref" | "target_not_found";
+
+export type TargetLookupResult =
+  | { ok: true; grounding: GroundingRecord }
+  | { ok: false; code: TargetLookupFailureCode; target: GroundedTarget; reason: string };
 
 export type BrowserError =
   | InvalidUrlError
