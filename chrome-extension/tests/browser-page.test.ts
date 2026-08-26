@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
 
@@ -18,9 +19,29 @@ interface FakePage extends Page {
   gotoError: Error | null;
   goBackError: Error | null;
   reloadError: Error | null;
+  session: FakeSession;
+}
+
+class FakeSession extends EventEmitter {
+  detached = false;
+
+  async send(method: string): Promise<unknown> {
+    if (method === "Page.enable") {
+      return {};
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "main-1", loaderId: "L1", url: "https://example.com" } } };
+    }
+    throw new Error(`unexpected send: ${method}`);
+  }
+
+  async detach(): Promise<void> {
+    this.detached = true;
+  }
 }
 
 function fakePage(currentUrl = "https://example.com"): FakePage {
+  const session = new FakeSession();
   const page = {
     gotoCalls: 0,
     goBackCalls: 0,
@@ -30,6 +51,8 @@ function fakePage(currentUrl = "https://example.com"): FakePage {
     gotoError: null,
     goBackError: null,
     reloadError: null,
+    session,
+    createCDPSession: async () => session,
     goto: async (url: string, options?: unknown) => {
       page.gotoCalls += 1;
       page.lastGotoArgs = [url, options];
@@ -243,6 +266,17 @@ describe("BrowserPage", () => {
     expect(browser.closeCalls).toBe(0);
     expect(page.attached).toBe(false);
     expect(page.page).toBeNull();
+  });
+
+  test("disconnect disposes the identity tracker session with the connection", async () => {
+    const { deps, page } = fakeDeps();
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    expect(page.session.detached).toBe(false);
+
+    await wrapper.disconnect();
+
+    expect(page.session.detached).toBe(true);
   });
 
   test("disconnect without an attach is a no-op", async () => {

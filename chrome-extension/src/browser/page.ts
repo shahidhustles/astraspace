@@ -4,6 +4,7 @@ import {
   type Browser,
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import { MainFrameIdentityTracker } from "./document-identity";
 import {
   buildHighlightOverlayExpression,
   enrichPageContentWithAccessibility,
@@ -12,7 +13,12 @@ import {
   removeHighlightOverlayExpression,
   renderPageContent,
   type ExtractedPageContent,
+  type GroundingRecord,
+  type ObservedRef,
+  type ScrollState,
+  type ViewportCapture,
 } from "./observation";
+import { SnapshotStore } from "./snapshot";
 import { enforceUrlPolicy } from "./url-policy";
 import type { BrowserError, ObserveResult, UrlPolicyResult } from "./types";
 
@@ -23,6 +29,7 @@ export interface PageDeps {
   connect: (options: Parameters<typeof connect>[0]) => Promise<Browser>;
   connectTab: (tabId: number) => Promise<ExtensionTransport>;
   timeoutMs: number;
+  snapshotStore?: SnapshotStore;
 }
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
@@ -31,14 +38,31 @@ export type NavResult = { ok: true; url: string } | { ok: false; error: BrowserE
 
 export type DisconnectResult = { ok: true } | { ok: false; error: BrowserError };
 
+export interface StagedObservation {
+  tabId: number;
+  url: string;
+  title: string;
+  scroll: ScrollState;
+  dom: string;
+  refs: ObservedRef[];
+  groundings: GroundingRecord[];
+  screenshot: ViewportCapture;
+  documentEpoch: number;
+  navigationEpoch: number;
+}
+
+export type StageResult = { ok: true; staged: StagedObservation } | { ok: false; error: BrowserError };
+
 export class BrowserPage {
   readonly tabId: number;
   readonly url: string;
 
   private readonly deps: PageDeps;
   private readonly policy: UrlPolicyResult;
+  private readonly snapshots: SnapshotStore;
   private browser: Browser | null = null;
   private puppeteerPage: Page | null = null;
+  private identityTracker: MainFrameIdentityTracker | null = null;
   private observationQueue: Promise<void> = Promise.resolve();
 
   constructor(tabId: number, url: string, deps: PageDeps = defaultDeps) {
@@ -46,6 +70,7 @@ export class BrowserPage {
     this.url = url;
     this.deps = deps;
     this.policy = enforceUrlPolicy(url);
+    this.snapshots = deps.snapshotStore ?? new SnapshotStore();
   }
 
   get attached(): boolean {
@@ -76,8 +101,11 @@ export class BrowserPage {
         await browser.disconnect();
         return { ok: false, error: { code: "attach_failed", message: "Connection exposed no page" } };
       }
+      const session = await page.createCDPSession();
+      const identityTracker = await MainFrameIdentityTracker.create(session);
       this.browser = browser;
       this.puppeteerPage = page;
+      this.identityTracker = identityTracker;
       return { ok: true, tabId: this.tabId };
     } catch (error) {
       if (browser) {
@@ -94,6 +122,8 @@ export class BrowserPage {
     const browser = this.browser;
     this.browser = null;
     this.puppeteerPage = null;
+    this.identityTracker?.dispose();
+    this.identityTracker = null;
     if (!browser) {
       return { ok: true };
     }
@@ -131,11 +161,23 @@ export class BrowserPage {
   }
 
   private async performObservation(): Promise<ObserveResult> {
+    const staged = await this.stageObservation();
+    if (!staged.ok) {
+      return staged;
+    }
+    return this.commitObservation(staged.staged);
+  }
+
+  async stageObservation(): Promise<StageResult> {
     if (!this.attached || !this.puppeteerPage) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     if (!this.policy.ok) {
       return { ok: false, error: this.policy.error };
+    }
+    const tracker = this.identityTracker;
+    if (!tracker) {
+      return this.failCapture();
     }
     const page = this.puppeteerPage;
     const url = page.url();
@@ -143,6 +185,7 @@ export class BrowserPage {
     if (!currentPolicy.ok) {
       return { ok: false, error: currentPolicy.error };
     }
+    const identityBefore = tracker.identity;
 
     try {
       const title = await page.title();
@@ -191,28 +234,74 @@ export class BrowserPage {
 
       const finalUrl = page.url();
       if (finalUrl !== url || !enforceUrlPolicy(finalUrl).ok) {
-        return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+        return this.failCapture();
+      }
+      const identityAfter = tracker.identity;
+      if (
+        identityAfter.documentEpoch !== identityBefore.documentEpoch ||
+        identityAfter.navigationEpoch !== identityBefore.navigationEpoch
+      ) {
+        return this.failCapture();
       }
       const screenshotDimensions = readJpegDimensions(data);
       if (!screenshotDimensions) {
-        return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+        return this.failCapture();
       }
 
       return {
         ok: true,
-        state: {
+        staged: {
           tabId: this.tabId,
           url,
           title,
           scroll: viewport.scroll,
           dom: rendered.dom,
           refs,
+          groundings: rendered.groundings,
           screenshot: { mimeType: "image/jpeg", data, ...screenshotDimensions },
+          documentEpoch: identityBefore.documentEpoch,
+          navigationEpoch: identityBefore.navigationEpoch,
         },
       };
     } catch {
-      return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
+      return this.failCapture();
     }
+  }
+
+  commitObservation(staged: StagedObservation): ObserveResult {
+    const committed = this.snapshots.commit({
+      tabId: this.tabId,
+      documentEpoch: staged.documentEpoch,
+      navigationEpoch: staged.navigationEpoch,
+      dom: staged.dom,
+      refs: staged.refs,
+      groundings: staged.groundings,
+    });
+    if (!committed.ok) {
+      return this.failCapture();
+    }
+    const identity = committed.snapshot.identity;
+    return {
+      ok: true,
+      state: {
+        tabId: this.tabId,
+        url: staged.url,
+        title: staged.title,
+        scroll: staged.scroll,
+        dom: staged.dom,
+        refs: staged.refs,
+        screenshot: staged.screenshot,
+        snapshotId: identity.snapshotId,
+        snapshotVersion: identity.snapshotVersion,
+        documentEpoch: identity.documentEpoch,
+        navigationEpoch: identity.navigationEpoch,
+      },
+    };
+  }
+
+  private failCapture(): { ok: false; error: BrowserError } {
+    this.snapshots.invalidate(this.tabId);
+    return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
   }
 
   private navOptions() {
@@ -250,6 +339,8 @@ export class BrowserPage {
     if (this.browser && !this.browser.connected) {
       this.browser = null;
       this.puppeteerPage = null;
+      this.identityTracker?.dispose();
+      this.identityTracker = null;
     }
   }
 }

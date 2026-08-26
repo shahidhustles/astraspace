@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { Window } from "happy-dom";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserContext } from "../src/browser/context";
@@ -58,12 +59,27 @@ interface FakeBrowser extends Browser {
   connected: boolean;
 }
 
+class FakeSession extends EventEmitter {
+  async send(method: string): Promise<unknown> {
+    if (method === "Page.enable") {
+      return {};
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "main-1", loaderId: "L1", url: "https://fixture.test/" } } };
+    }
+    throw new Error(`unexpected send: ${method}`);
+  }
+
+  async detach(): Promise<void> {}
+}
+
 function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
   const page = {
     currentUrl,
     evaluateError: null,
     screenshotError: null,
     url: () => page.currentUrl,
+    createCDPSession: async () => new FakeSession(),
     evaluate: async (expression: string): Promise<unknown> => {
       if (page.evaluateError) {
         throw page.evaluateError;

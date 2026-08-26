@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserContext } from "../src/browser/context";
 import type { PageDeps } from "../src/browser/page";
@@ -17,6 +18,20 @@ interface FakePage extends Page {
   gotoError: Error | null;
 }
 
+class FakeSession extends EventEmitter {
+  async send(method: string): Promise<unknown> {
+    if (method === "Page.enable") {
+      return {};
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "main-1", loaderId: "L1", url: "https://example.com" } } };
+    }
+    throw new Error(`unexpected send: ${method}`);
+  }
+
+  async detach(): Promise<void> {}
+}
+
 function fakePage(): FakePage {
   const page = {
     gotoCalls: 0,
@@ -24,6 +39,7 @@ function fakePage(): FakePage {
     reloadCalls: 0,
     currentUrl: "https://example.com",
     gotoError: null,
+    createCDPSession: async () => new FakeSession(),
     goto: async () => {
       page.gotoCalls += 1;
       if (page.gotoError) {

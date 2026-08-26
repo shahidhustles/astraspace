@@ -142,6 +142,10 @@ export interface PageObservation {
   dom: string;
   refs: ObservedRef[];
   screenshot: ViewportCapture;
+  snapshotId: SnapshotId;
+  snapshotVersion: number;
+  documentEpoch: number;
+  navigationEpoch: number;
 }
 
 export type ObserveResult = { ok: true; state: PageObservation } | { ok: false; error: BrowserError };
@@ -155,6 +159,10 @@ export interface BrowserState {
   dom: string;
   refs: ObservedRef[];
   screenshot: ViewportCapture;
+  snapshotId: SnapshotId;
+  snapshotVersion: number;
+  documentEpoch: number;
+  navigationEpoch: number;
 }
 
 export type ObservationResult = { ok: true; state: BrowserState } | { ok: false; error: BrowserError };

@@ -17,6 +17,10 @@ const OBSERVED_STATE: BrowserState = {
   dom: "[1]<a href=https://example.com>Example</a>",
   refs: [{ ref: 1, tag: "a", role: "link", name: "Example", attrs: {}, bounds: null }],
   screenshot: { mimeType: "image/jpeg", data: "base64", width: 800, height: 600 },
+  snapshotId: "snap-1" as BrowserState["snapshotId"],
+  snapshotVersion: 1,
+  documentEpoch: 0,
+  navigationEpoch: 0,
 };
 
 describe("browser runtime messages", () => {

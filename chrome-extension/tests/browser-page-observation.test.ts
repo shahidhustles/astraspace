@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { Window } from "happy-dom";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { SerializableAXNode } from "../src/browser/observation/accessibility";
@@ -9,6 +10,7 @@ import {
   renderPageContent,
 } from "../src/browser/observation";
 import type { ExtractedPageContent } from "../src/browser/observation";
+import { SnapshotStore } from "../src/browser/snapshot";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
 import type { PageObservation } from "../src/browser/types";
 
@@ -71,7 +73,27 @@ interface FakeBrowser extends Browser {
   connected: boolean;
 }
 
-function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
+class FakeSession extends EventEmitter {
+  detached = false;
+  sent: string[] = [];
+
+  async send(method: string): Promise<unknown> {
+    this.sent.push(method);
+    if (method === "Page.enable") {
+      return {};
+    }
+    if (method === "Page.getFrameTree") {
+      return { frameTree: { frame: { id: "main-1", loaderId: "L1", url: "https://fixture.test/" } } };
+    }
+    throw new Error(`unexpected send: ${method}`);
+  }
+
+  async detach(): Promise<void> {
+    this.detached = true;
+  }
+}
+
+function fakePage(win: Window, currentUrl = "https://fixture.test/", session = new FakeSession()): FakePage {
   const page = {
     currentUrl,
     titleCalls: 0,
@@ -83,6 +105,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
     lastScreenshotArgs: null,
     axSnapshots: [],
     url: () => page.currentUrl,
+    createCDPSession: async () => session,
     evaluate: async (expression: string): Promise<unknown> => {
       page.evaluateCalls.push(expression);
       if (page.evaluateError) {
@@ -137,8 +160,13 @@ function fakeBrowser(pages: Page[], options: { connected?: boolean } = {}): Fake
   return browser;
 }
 
-function fakeDeps(win: Window, currentUrl = "https://fixture.test/"): { deps: PageDeps; page: FakePage } {
-  const page = fakePage(win, currentUrl);
+function fakeDeps(
+  win: Window,
+  currentUrl = "https://fixture.test/",
+  snapshotStore?: SnapshotStore,
+): { deps: PageDeps; page: FakePage; session: FakeSession } {
+  const session = new FakeSession();
+  const page = fakePage(win, currentUrl, session);
   const browser = fakeBrowser([page]);
   const deps: PageDeps = {
     connect: async () => browser,
@@ -146,8 +174,14 @@ function fakeDeps(win: Window, currentUrl = "https://fixture.test/"): { deps: Pa
       return {} as never;
     },
     timeoutMs: 100,
+    ...(snapshotStore ? { snapshotStore } : {}),
   };
-  return { deps, page };
+  return { deps, page, session };
+}
+
+function sequencedUuids(): () => string {
+  let next = 0;
+  return () => `snap-${(next += 1)}`;
 }
 
 function evaluateSource(source: string): (...args: unknown[]) => unknown {
@@ -186,7 +220,7 @@ describe("page observation scripts", () => {
 describe("BrowserPage.observe", () => {
   test("returns every page observation field from one ordered call", async () => {
     const win = fixtureWindow();
-    const { deps, page } = fakeDeps(win);
+    const { deps, page } = fakeDeps(win, "https://fixture.test/", new SnapshotStore({ createUuid: sequencedUuids() }));
     const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
     await wrapper.attach();
 
@@ -201,6 +235,10 @@ describe("BrowserPage.observe", () => {
     expect(state.dom).toContain("[1]<input role=textbox");
     expect(state.dom).toContain("[4]<div role=button");
     expect(state.refs.map((r) => r.ref)).toEqual([1, 2, 3, 4]);
+    expect(state.snapshotId).toBe("snap-1");
+    expect(state.snapshotVersion).toBe(1);
+    expect(state.documentEpoch).toBe(0);
+    expect(state.navigationEpoch).toBe(0);
     expect(state.screenshot).toEqual({
       mimeType: "image/jpeg",
       data: JPEG_BASE64,
@@ -358,6 +396,90 @@ describe("BrowserPage.observe", () => {
     expect(firstResult.ok).toBe(true);
     expect(secondResult.ok).toBe(true);
     expect(page.screenshotCalls).toBe(2);
+    expect(overlayNodes(win.document)).toHaveLength(0);
+  });
+
+  test("two successful observations return unique IDs and increasing versions with current epochs", async () => {
+    const win = fixtureWindow();
+    const { deps } = fakeDeps(win, "https://fixture.test/", new SnapshotStore({ createUuid: sequencedUuids() }));
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const first = await wrapper.observe();
+    const second = await wrapper.observe();
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) throw new Error("expected success");
+    expect(first.state.snapshotId).toBe("snap-1");
+    expect(first.state.snapshotVersion).toBe(1);
+    expect(first.state.documentEpoch).toBe(0);
+    expect(first.state.navigationEpoch).toBe(0);
+    expect(second.state.snapshotId).toBe("snap-2");
+    expect(second.state.snapshotVersion).toBe(2);
+    expect(second.state.documentEpoch).toBe(0);
+    expect(second.state.navigationEpoch).toBe(0);
+    expect(first.state.snapshotId).not.toBe(second.state.snapshotId);
+    expect(first.state.dom).toBe(second.state.dom);
+  });
+
+  test("a failed capture consumes no version and disables earlier snapshots until a later success", async () => {
+    const win = fixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, page } = fakeDeps(win, "https://fixture.test/", store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const first = await wrapper.observe();
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("expected success");
+
+    page.screenshotError = new Error("capture failed");
+    const failed = await wrapper.observe();
+    expect(failed).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(
+      store.lookup({ tabId: 7, snapshotId: first.state.snapshotId, ref: 1 }, { documentEpoch: 0, navigationEpoch: 0 }),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
+
+    page.screenshotError = null;
+    const third = await wrapper.observe();
+    expect(third.ok).toBe(true);
+    if (!third.ok) throw new Error("expected success");
+    expect(third.state.snapshotVersion).toBe(2);
+  });
+
+  test("rejects an observation when the frame identity changes during capture", async () => {
+    const win = fixtureWindow();
+    const { deps, page, session } = fakeDeps(
+      win,
+      "https://fixture.test/",
+      new SnapshotStore({ createUuid: sequencedUuids() }),
+    );
+    let releaseScreenshot: (() => void) | null = null;
+    page.screenshotGate = new Promise<void>((resolve) => {
+      releaseScreenshot = resolve;
+    });
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const observation = wrapper.observe();
+    while (page.screenshotCalls === 0) {
+      await Promise.resolve();
+    }
+    session.emit("Page.frameNavigated", {
+      frame: { id: "main-1", loaderId: "L2", url: "https://fixture.test/next" },
+      type: "Navigation",
+    });
+    releaseScreenshot?.();
+    const result = await observation;
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
     expect(overlayNodes(win.document)).toHaveLength(0);
   });
 });
