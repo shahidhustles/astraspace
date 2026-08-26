@@ -9,6 +9,7 @@ export class MainFrameIdentityTracker {
   private disposed = false;
   private readonly session: CDPSession;
   private readonly mainFrameId: string;
+  private readonly onChange: (() => void) | undefined;
   private loaderId: string;
   private documentEpoch: number;
   private navigationEpoch: number;
@@ -19,11 +20,13 @@ export class MainFrameIdentityTracker {
     session: CDPSession,
     mainFrameId: string,
     loaderId: string,
+    onChange?: () => void,
     documentEpoch = 0,
     navigationEpoch = 0,
   ) {
     this.session = session;
     this.mainFrameId = mainFrameId;
+    this.onChange = onChange;
     this.loaderId = loaderId;
     this.documentEpoch = documentEpoch;
     this.navigationEpoch = navigationEpoch;
@@ -34,21 +37,23 @@ export class MainFrameIdentityTracker {
       this.loaderId = event.frame.loaderId;
       this.documentEpoch += 1;
       this.navigationEpoch += 1;
+      this.onChange?.();
     };
     this.onNavigatedWithinDocument = (event) => {
       if (event.frameId !== this.mainFrameId) {
         return;
       }
       this.navigationEpoch += 1;
+      this.onChange?.();
     };
     session.on("Page.frameNavigated", this.onFrameNavigated);
     session.on("Page.navigatedWithinDocument", this.onNavigatedWithinDocument);
   }
 
-  static async create(session: CDPSession): Promise<MainFrameIdentityTracker> {
+  static async create(session: CDPSession, onChange?: () => void): Promise<MainFrameIdentityTracker> {
     await session.send("Page.enable");
     const { frameTree } = await session.send("Page.getFrameTree");
-    return new MainFrameIdentityTracker(session, frameTree.frame.id, frameTree.frame.loaderId);
+    return new MainFrameIdentityTracker(session, frameTree.frame.id, frameTree.frame.loaderId, onChange);
   }
 
   get identity(): FrameIdentity {

@@ -3,7 +3,17 @@ import { EventEmitter } from "node:events";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserContext } from "../src/browser/context";
 import type { PageDeps } from "../src/browser/page";
+import { SnapshotStore } from "../src/browser/snapshot";
 import type { DiagnosticEvent } from "../src/browser/types";
+
+class SpyStore extends SnapshotStore {
+  invalidatedTabs: number[] = [];
+
+  invalidate(tabId: number): void {
+    this.invalidatedTabs.push(tabId);
+    super.invalidate(tabId);
+  }
+}
 
 interface FakeBrowser extends Browser {
   disconnectCalls: number;
@@ -91,6 +101,7 @@ interface FakeDeps {
   browsers: FakeBrowser[];
   api: FakeEvents;
   page: FakePage;
+  snapshotStore: SpyStore;
 }
 
 function setup(overrides: {
@@ -102,6 +113,7 @@ function setup(overrides: {
   updateTab?: (tabId: number) => Promise<chrome.tabs.Tab>;
   removeTab?: (tabId: number) => Promise<void>;
   timeoutMs?: number;
+  snapshotStore?: SnapshotStore;
 } = {}): FakeDeps {
   let connectTabCalls = 0;
   const page = fakePage();
@@ -127,6 +139,8 @@ function setup(overrides: {
     },
     ...overrides,
   };
+  const snapshotStore = overrides.snapshotStore ?? new SpyStore();
+  pageDeps.snapshotStore = snapshotStore;
 
   const context = new BrowserContext({
     queryActiveTab: async () => overrides.tabs ?? [],
@@ -184,7 +198,7 @@ function setup(overrides: {
     detachedListenerCount: () => detachedListeners.size,
   };
 
-  return { context, events, connectTabCalls: () => connectTabCalls, removeTabCalls: () => removedTabIds, browsers, api, page };
+  return { context, events, connectTabCalls: () => connectTabCalls, removeTabCalls: () => removedTabIds, browsers, api, page, snapshotStore };
 }
 
 function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] {
@@ -912,6 +926,84 @@ describe("BrowserContext", () => {
       failures: [{ code: "disconnect_failed", message: "Failed to disconnect from tab" }],
     });
     expect(context.tabCount).toBe(0);
+    expect(context.selectedTabId).toBeNull();
+  });
+
+  test("switching between tabs never invalidates snapshot state", async () => {
+    const { context, snapshotStore, api } = setup({
+      tabs: activeTab(),
+      createTab: async (url) => ({ id: 42, url }) as chrome.tabs.Tab,
+    });
+    await context.useActiveTab();
+    const opened = context.openTab("https://b.example");
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://b.example" });
+    expect((await opened).ok).toBe(true);
+
+    const first = context.switchTab(42);
+    await Promise.resolve();
+    api.emitActivated(42);
+    expect(await first).toEqual({ ok: true, tabId: 42 });
+    const second = context.switchTab(7);
+    await Promise.resolve();
+    api.emitActivated(7);
+    expect(await second).toEqual({ ok: true, tabId: 7 });
+
+    expect(snapshotStore.invalidatedTabs).toEqual([]);
+    expect(context.selectedTabId).toBe(7);
+  });
+
+  test("closeTab invalidates only the closed tab's snapshot state", async () => {
+    const { context, snapshotStore, api } = setup({
+      tabs: activeTab(),
+      createTab: async (url) => ({ id: 42, url }) as chrome.tabs.Tab,
+    });
+    await context.useActiveTab();
+    const opened = context.openTab("https://b.example");
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://b.example" });
+    expect((await opened).ok).toBe(true);
+
+    await context.closeTab(42);
+
+    expect(snapshotStore.invalidatedTabs).toEqual([42]);
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBeNull();
+  });
+
+  test("a tab-removal event invalidates only the removed tab's snapshot state", async () => {
+    const { context, snapshotStore, api } = setup({
+      tabs: activeTab(),
+      createTab: async (url) => ({ id: 42, url }) as chrome.tabs.Tab,
+    });
+    await context.useActiveTab();
+    const opened = context.openTab("https://b.example");
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://b.example" });
+    expect((await opened).ok).toBe(true);
+
+    api.emitRemoved(42);
+
+    expect(snapshotStore.invalidatedTabs).toEqual([42]);
+    expect(context.tabCount).toBe(1);
+    expect(context.selectedTabId).toBeNull();
+  });
+
+  test("a debugger detach invalidates only the detached tab's snapshot state", async () => {
+    const { context, snapshotStore, api } = setup({
+      tabs: activeTab(),
+      createTab: async (url) => ({ id: 42, url }) as chrome.tabs.Tab,
+    });
+    await context.useActiveTab();
+    const opened = context.openTab("https://b.example");
+    await Promise.resolve();
+    api.emitUpdated({ id: 42, url: "https://b.example" });
+    expect((await opened).ok).toBe(true);
+
+    api.emitDetached(42);
+
+    expect(snapshotStore.invalidatedTabs).toEqual([42]);
+    expect(context.tabCount).toBe(1);
     expect(context.selectedTabId).toBeNull();
   });
 });

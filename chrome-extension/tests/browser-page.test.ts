@@ -2,6 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
+import { SnapshotStore } from "../src/browser/snapshot";
+
+class SpyStore extends SnapshotStore {
+  invalidatedTabs: number[] = [];
+
+  invalidate(tabId: number): void {
+    this.invalidatedTabs.push(tabId);
+    super.invalidate(tabId);
+  }
+}
 
 interface FakeBrowser extends Browser {
   pagesCalls: number;
@@ -464,5 +474,125 @@ describe("BrowserPage", () => {
         url: "https://chromewebstore.google.com/detail/xyz",
       },
     });
+  });
+
+  test("navigate invalidates the snapshot cache before dispatch", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "https://example.com/page2";
+
+    const result = await wrapper.navigate("https://example.com/page2");
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/page2" });
+    expect(store.invalidatedTabs).toEqual([7]);
+    expect(page.gotoCalls).toBe(1);
+  });
+
+  test("navigate invalidates the snapshot cache even when dispatch fails", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.gotoError = timeoutError("Navigation timeout of 100 ms exceeded");
+
+    const result = await wrapper.navigate("https://example.com/slow");
+
+    expect(result.ok).toBe(false);
+    expect(store.invalidatedTabs).toEqual([7]);
+  });
+
+  test("navigate to a blocked destination does not invalidate the snapshot cache", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.navigate("chrome://newtab");
+
+    expect(result.ok).toBe(false);
+    expect(store.invalidatedTabs).toEqual([]);
+    expect(page.gotoCalls).toBe(0);
+  });
+
+  test("goBack invalidates the snapshot cache before dispatch", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+    page.currentUrl = "https://example.com/start";
+
+    const result = await wrapper.goBack();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
+    expect(store.invalidatedTabs).toEqual([7]);
+    expect(page.goBackCalls).toBe(1);
+  });
+
+  test("reload invalidates the snapshot cache before dispatch", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    const result = await wrapper.reload();
+
+    expect(result).toEqual({ ok: true, url: "https://example.com" });
+    expect(store.invalidatedTabs).toEqual([7]);
+    expect(page.reloadCalls).toBe(1);
+  });
+
+  test("an external full-document navigation invalidates the snapshot cache", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    page.session.emit("Page.frameNavigated", {
+      frame: { id: "main-1", loaderId: "L2", url: "https://example.com/page2" },
+      type: "Navigation",
+    });
+
+    expect(store.invalidatedTabs).toEqual([7]);
+  });
+
+  test("a same-document navigation invalidates the snapshot cache", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    page.session.emit("Page.navigatedWithinDocument", {
+      frameId: "main-1",
+      url: "https://example.com/#section",
+    });
+
+    expect(store.invalidatedTabs).toEqual([7]);
+  });
+
+  test("a subframe navigation does not invalidate the snapshot cache", async () => {
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    page.session.emit("Page.frameNavigated", {
+      frame: { id: "sub-1", loaderId: "L2", url: "https://example.com/widget" },
+      type: "Navigation",
+    });
+
+    expect(store.invalidatedTabs).toEqual([]);
+  });
+
+  test("disconnect invalidates the snapshot cache", async () => {
+    const store = new SpyStore();
+    const { deps } = fakeDeps({ snapshotStore: store });
+    const wrapper = new BrowserPage(7, "https://example.com", deps);
+    await wrapper.attach();
+
+    await wrapper.disconnect();
+
+    expect(store.invalidatedTabs).toEqual([7]);
   });
 });

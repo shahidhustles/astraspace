@@ -103,7 +103,9 @@ export class BrowserPage {
         return { ok: false, error: { code: "attach_failed", message: "Connection exposed no page" } };
       }
       const session = await page.createCDPSession();
-      const identityTracker = await MainFrameIdentityTracker.create(session);
+      const identityTracker = await MainFrameIdentityTracker.create(session, () =>
+        this.snapshots.invalidate(this.tabId),
+      );
       this.browser = browser;
       this.puppeteerPage = page;
       this.identityTracker = identityTracker;
@@ -125,6 +127,7 @@ export class BrowserPage {
     this.puppeteerPage = null;
     this.identityTracker?.dispose();
     this.identityTracker = null;
+    this.snapshots.invalidate(this.tabId);
     if (!browser) {
       return { ok: true };
     }
@@ -307,6 +310,10 @@ export class BrowserPage {
     return resolveTarget(this.puppeteerPage, this.snapshots, target, this.identityTracker.identity);
   }
 
+  invalidateTargets(): void {
+    this.snapshots.invalidate(this.tabId);
+  }
+
   private failCapture(): { ok: false; error: BrowserError } {
     this.snapshots.invalidate(this.tabId);
     return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
@@ -320,6 +327,7 @@ export class BrowserPage {
     if (!this.attached || !this.puppeteerPage) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
+    this.snapshots.invalidate(this.tabId);
 
     const page = this.puppeteerPage;
     try {
@@ -349,6 +357,7 @@ export class BrowserPage {
       this.puppeteerPage = null;
       this.identityTracker?.dispose();
       this.identityTracker = null;
+      this.snapshots.invalidate(this.tabId);
     }
   }
 }

@@ -298,13 +298,19 @@ export class BrowserContext {
   }
 
   private handleTabRemoved(tabId: number): void {
+    this.discardTargets(tabId);
     this.removeTabRecord(tabId);
   }
 
   private handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
     if (source.tabId !== undefined) {
+      this.discardTargets(source.tabId);
       this.removeTabRecord(source.tabId);
     }
+  }
+
+  private discardTargets(tabId: number): void {
+    this.pages.get(tabId)?.invalidateTargets();
   }
 
   private removeTabRecord(tabId: number): void {

@@ -127,6 +127,7 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
     evaluateError: null,
     url: () => page.currentUrl,
     createCDPSession: async () => session ?? new FakeSession(),
+    goto: async () => ({}),
     evaluate: async (expression: unknown, ...args: unknown[]): Promise<unknown> => {
       page.evaluateCalls += 1;
       if (page.evaluateError) {
@@ -463,5 +464,105 @@ describe("BrowserPage.resolveTarget", () => {
       target: expect.any(Object),
       reason: expect.any(String),
     });
+  });
+
+  test("returns stale_ref after an external navigation without touching the DOM", async () => {
+    const win = fixtureWindow("pair");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, page, session } = fakeDeps(win, store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+    const observed = await wrapper.observe();
+    expect(observed.ok).toBe(true);
+    if (!observed.ok) throw new Error("expected success");
+    const evaluateCalls = page.evaluateCalls;
+
+    session.emit("Page.frameNavigated", {
+      frame: { id: "main-1", loaderId: "L2", url: "https://fixture.test/page2" },
+      type: "Navigation",
+    });
+    const resolved = await wrapper.resolveTarget({
+      tabId: 7,
+      snapshotId: observed.state.snapshotId,
+      ref: 1,
+    });
+
+    expect(resolved).toEqual({
+      ok: false,
+      code: "stale_ref",
+      target: expect.any(Object),
+      reason: expect.any(String),
+    });
+    expect(page.evaluateCalls).toBe(evaluateCalls);
+    expect(page.selectorCalls).toBe(0);
+  });
+
+  test("returns stale_ref after a same-document navigation without touching the DOM", async () => {
+    const win = fixtureWindow("pair");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, page, session } = fakeDeps(win, store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+    const observed = await wrapper.observe();
+    expect(observed.ok).toBe(true);
+    if (!observed.ok) throw new Error("expected success");
+    const evaluateCalls = page.evaluateCalls;
+
+    session.emit("Page.navigatedWithinDocument", {
+      frameId: "main-1",
+      url: "https://fixture.test/#section",
+    });
+    const resolved = await wrapper.resolveTarget({
+      tabId: 7,
+      snapshotId: observed.state.snapshotId,
+      ref: 1,
+    });
+
+    expect(resolved).toEqual({
+      ok: false,
+      code: "stale_ref",
+      target: expect.any(Object),
+      reason: expect.any(String),
+    });
+    expect(page.evaluateCalls).toBe(evaluateCalls);
+    expect(page.selectorCalls).toBe(0);
+  });
+
+  test("returns stale_ref after a dispatched navigation and resolves again after re-observation", async () => {
+    const win = fixtureWindow("pair");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, page } = fakeDeps(win, store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+    const observed = await wrapper.observe();
+    expect(observed.ok).toBe(true);
+    if (!observed.ok) throw new Error("expected success");
+
+    page.currentUrl = "https://fixture.test/other";
+    await wrapper.navigate("https://fixture.test/other");
+
+    const stale = await wrapper.resolveTarget({
+      tabId: 7,
+      snapshotId: observed.state.snapshotId,
+      ref: 1,
+    });
+    expect(stale).toEqual({
+      ok: false,
+      code: "stale_ref",
+      target: expect.any(Object),
+      reason: expect.any(String),
+    });
+
+    const refreshed = await wrapper.observe();
+    expect(refreshed.ok).toBe(true);
+    if (!refreshed.ok) throw new Error("expected success");
+    const resolved = await wrapper.resolveTarget({
+      tabId: 7,
+      snapshotId: refreshed.state.snapshotId,
+      ref: 1,
+    });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) throw new Error("expected success");
+    expect(await resolved.element.evaluate((el) => (el as Element).id)).toBe("save");
   });
 });
