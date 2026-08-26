@@ -50,8 +50,8 @@ function emitFrameAttached(session: FakeSession, frameId: string, parentFrameId:
   session.emit("Page.frameAttached", { frameId, parentFrameId });
 }
 
-function emitFrameDetached(session: FakeSession, frameId: string): void {
-  session.emit("Page.frameDetached", { frameId, reason: "remove" });
+function emitFrameDetached(session: FakeSession, frameId: string, reason: "remove" | "swap" = "remove"): void {
+  session.emit("Page.frameDetached", { frameId, reason });
 }
 
 async function createTracker(session: FakeSession, main: Record<string, unknown>): Promise<FrameGraphTracker> {
@@ -111,6 +111,7 @@ describe("FrameGraphTracker", () => {
 
     emitNavigatedWithinDocument(session, MAIN_FRAME_ID);
     expect(tracker.identity).toEqual({ documentEpoch: 0, navigationEpoch: 1 });
+    expect(tracker.record(MAIN_FRAME_ID)?.url).toBe("https://fixture.test/#fragment");
 
     emitFrameNavigated(session, frame(MAIN_FRAME_ID, "L2"));
     expect(tracker.identity).toEqual({ documentEpoch: 1, navigationEpoch: 2 });
@@ -152,6 +153,19 @@ describe("FrameGraphTracker", () => {
     expect(tracker.record(SUB_FRAME_ID)?.retired).toBe(true);
     expect(tracker.identity).toEqual({ documentEpoch: 1, navigationEpoch: 1 });
     expect(tracker.version).toBe(1);
+  });
+
+  test("a new parentless frame replaces the main frame and preserves monotonic epochs", async () => {
+    const session = new FakeSession();
+    const tracker = await createTracker(session, frame(MAIN_FRAME_ID, "L1"));
+
+    emitFrameNavigated(session, frame("main-2", "L2"));
+
+    expect(tracker.mainFrameId).toBe("main-2");
+    expect(tracker.identity).toEqual({ documentEpoch: 1, navigationEpoch: 1 });
+    expect(tracker.record(MAIN_FRAME_ID)?.retired).toBe(true);
+    expect(tracker.record(SUB_FRAME_ID)?.retired).toBe(true);
+    expect(tracker.liveFrameIds()).toEqual(["main-2"]);
   });
 
   test("navigating a retired frame restores it", async () => {
@@ -208,6 +222,37 @@ describe("FrameGraphTracker", () => {
     expect(tracker.record(SUB_FRAME_ID)).toBeNull();
     expect(tracker.record("sub-2")?.retired).toBe(true);
     expect(tracker.version).toBe(1);
+  });
+
+  test("a frame swap keeps the live frame record", async () => {
+    const session = new FakeSession();
+    const tracker = await createTracker(session, frame(MAIN_FRAME_ID, "L1"));
+
+    emitFrameDetached(session, SUB_FRAME_ID, "swap");
+
+    expect(tracker.record(SUB_FRAME_ID)?.retired).toBe(false);
+    expect(tracker.version).toBe(0);
+  });
+
+  test("retiring a frame retires every nested descendant", async () => {
+    const session = new FakeSession();
+    session.frameTree = {
+      frame: frame(MAIN_FRAME_ID, "L1"),
+      childFrames: [{
+        frame: frame(SUB_FRAME_ID, "L-sub", MAIN_FRAME_ID),
+        childFrames: [{
+          frame: frame("sub-2", "L-sub-2", SUB_FRAME_ID),
+          childFrames: [{ frame: frame("sub-3", "L-sub-3", "sub-2") }],
+        }],
+      }],
+    };
+    const tracker = await FrameGraphTracker.create(session as unknown as CDPSession);
+
+    emitFrameNavigated(session, frame(MAIN_FRAME_ID, "L2"));
+
+    expect(tracker.record(SUB_FRAME_ID)?.retired).toBe(true);
+    expect(tracker.record("sub-2")?.retired).toBe(true);
+    expect(tracker.record("sub-3")?.retired).toBe(true);
   });
 
   test("owner node IDs are binding metadata and do not bump the version", async () => {

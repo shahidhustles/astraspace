@@ -55,7 +55,7 @@ export class FrameGraphTracker {
   private readonly session: CDPSession;
   private readonly onChange: (() => void) | undefined;
   private readonly records = new Map<string, InternalFrameRecord>();
-  private readonly rootFrameId: string;
+  private rootFrameId: string;
   private graphVersion = 0;
   private readonly onFrameAttached: (event: Protocol.Page.FrameAttachedEvent) => void;
   private readonly onFrameDetached: (event: Protocol.Page.FrameDetachedEvent) => void;
@@ -96,6 +96,9 @@ export class FrameGraphTracker {
       if (this.disposed) {
         return;
       }
+      if (event.reason === "swap") {
+        return;
+      }
       const record = this.records.get(event.frameId);
       if (!record) {
         return;
@@ -113,6 +116,28 @@ export class FrameGraphTracker {
       const frame = event.frame;
       const record = this.records.get(frame.id);
       if (!record) {
+        if (!frame.parentId) {
+          const previousRoot = this.records.get(this.rootFrameId);
+          const documentEpoch = (previousRoot?.documentEpoch ?? 0) + 1;
+          const navigationEpoch = (previousRoot?.navigationEpoch ?? 0) + 1;
+          if (previousRoot) {
+            this.retireSubtree(previousRoot.frameId);
+          }
+          this.rootFrameId = frame.id;
+          this.records.set(frame.id, {
+            frameId: frame.id,
+            parentFrameId: null,
+            loaderId: frame.loaderId,
+            url: frame.url,
+            documentEpoch,
+            navigationEpoch,
+            ownerBackendNodeId: null,
+            retired: false,
+          });
+          this.graphVersion += 1;
+          this.onChange?.();
+          return;
+        }
         this.records.set(frame.id, {
           frameId: frame.id,
           parentFrameId: frame.parentId ?? null,
@@ -152,6 +177,7 @@ export class FrameGraphTracker {
         return;
       }
       record.navigationEpoch += 1;
+      record.url = event.url;
       this.graphVersion += 1;
       if (event.frameId === this.rootFrameId) {
         this.onChange?.();
@@ -198,6 +224,24 @@ export class FrameGraphTracker {
       .map(snapshot);
   }
 
+  liveFrameIds(): string[] {
+    const ids: string[] = [];
+    const visit = (frameId: string): void => {
+      const record = this.records.get(frameId);
+      if (!record || record.retired) {
+        return;
+      }
+      ids.push(frameId);
+      for (const child of this.records.values()) {
+        if (child.parentFrameId === frameId && !child.retired) {
+          visit(child.frameId);
+        }
+      }
+    };
+    visit(this.rootFrameId);
+    return ids;
+  }
+
   setOwnerBackendNodeId(frameId: string, backendNodeId: number): void {
     const record = this.records.get(frameId);
     if (record && record.ownerBackendNodeId !== backendNodeId) {
@@ -240,9 +284,12 @@ export class FrameGraphTracker {
     if (!record || record.retired) {
       return;
     }
+    const childIds = [...this.records.values()]
+      .filter((child) => child.parentFrameId === frameId && !child.retired)
+      .map((child) => child.frameId);
     record.retired = true;
-    for (const child of this.childrenOf(frameId)) {
-      this.retireSubtree(child.frameId);
+    for (const childId of childIds) {
+      this.retireSubtree(childId);
     }
   }
 }

@@ -213,6 +213,19 @@ describe("bindFrameGraph", () => {
     expect(result.code).toBe("missing_owner");
   });
 
+  test("fails when Chrome has a live frame Puppeteer omitted", async () => {
+    const { session, tracker } = await setup();
+    const page = new FakePage(new FakeFrame("main", [], null, null));
+
+    const result = await bindFrameGraph(page as unknown as Page, tracker, session as unknown as CDPSession);
+
+    expect(result).toEqual({
+      ok: false,
+      code: "missing_owner",
+      reason: expect.stringContaining(CHILD_A_ID),
+    });
+  });
+
   test("duplicate owner nodes across records return ambiguous_owner", async () => {
     const { session, tracker, page } = await setup();
     session.ownerNodes.set(CHILD_B_ID, 101);

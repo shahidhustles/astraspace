@@ -32,6 +32,15 @@ export async function bindFrameGraph(
   if (failure) {
     return failure;
   }
+  const mappedIds = new Set(frameIds.values());
+  const missingFrameId = tracker.liveFrameIds().find((frameId) => !mappedIds.has(frameId));
+  if (missingFrameId) {
+    return {
+      ok: false,
+      code: "missing_owner",
+      reason: `Chrome frame ${missingFrameId} has no live Puppeteer frame`,
+    };
+  }
   return { ok: true, frameIds };
 }
 
