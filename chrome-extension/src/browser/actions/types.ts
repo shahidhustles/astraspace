@@ -7,15 +7,34 @@ export type BrowserActionName =
   | "browser_back"
   | "browser_refresh"
   | "browser_click"
+  | "browser_type"
+  | "browser_clear_input"
+  | "browser_keypress"
   | "browser_open_tab"
   | "browser_switch_tab"
   | "browser_close_tab";
+
+export interface KeypressModifiers {
+  alt: boolean;
+  control: boolean;
+  meta: boolean;
+  shift: boolean;
+}
+
+export interface KeypressInput {
+  key: string;
+  modifiers: KeypressModifiers;
+  target: GroundedTarget | null;
+}
 
 export type BrowserActionRequest =
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_navigate"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_back"; input: Record<string, never> }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_refresh"; input: Record<string, never> }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_click"; input: GroundedTarget }
+  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_type"; input: { target: GroundedTarget; text: string } }
+  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_clear_input"; input: GroundedTarget }
+  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_keypress"; input: KeypressInput }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_open_tab"; input: { url: string } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_switch_tab"; input: { tabId: number } }
   | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_close_tab"; input: { tabId: number } };
@@ -25,6 +44,9 @@ export type BrowserActionData =
   | { kind: "back" }
   | { kind: "refresh" }
   | { kind: "click"; newTabId: number | null }
+  | { kind: "type" }
+  | { kind: "clear_input" }
+  | { kind: "keypress" }
   | { kind: "open_tab"; tabs: TabInfo[] | null }
   | { kind: "switch_tab"; tabs: TabInfo[] | null }
   | { kind: "close_tab"; tabs: TabInfo[] | null };
@@ -41,6 +63,11 @@ export interface ActionFailedError {
 
 export interface DisabledTargetError {
   code: "disabled_target";
+  message: string;
+}
+
+export interface ReadOnlyTargetError {
+  code: "read_only_target";
   message: string;
 }
 
@@ -65,6 +92,7 @@ export type BrowserActionError =
   | InvalidActionError
   | ActionFailedError
   | DisabledTargetError
+  | ReadOnlyTargetError
   | NotInteractableError
   | FileUploadRequiredError
   | GroundedTargetError;
@@ -88,3 +116,9 @@ export type BrowserActionResult =
 export type ClickResult =
   | { ok: true; url: string; newTabId: number | null }
   | { ok: false; error: BrowserActionError };
+
+export type TypeResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+
+export type ClearInputResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+
+export type KeypressResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };

@@ -1,6 +1,12 @@
 import { enforceUrlPolicy } from "./url-policy";
 import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
-import type { ClickResult } from "./actions/types";
+import type {
+  ClearInputResult,
+  ClickResult,
+  KeypressInput,
+  KeypressResult,
+  TypeResult,
+} from "./actions/types";
 import type { BrowserError, DiagnosticEvent, GroundedTarget, ObservationResult, TabInfo } from "./types";
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
@@ -288,6 +294,40 @@ export class BrowserContext {
       return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
     }
     return page.click(target);
+  }
+
+  async type(target: GroundedTarget, text: string): Promise<TypeResult> {
+    const page = this.pages.get(target.tabId);
+    if (!page) {
+      return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
+    }
+    return page.type(target, text);
+  }
+
+  async clearInput(target: GroundedTarget): Promise<ClearInputResult> {
+    const page = this.pages.get(target.tabId);
+    if (!page) {
+      return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
+    }
+    return page.clearInput(target);
+  }
+
+  async keypress(input: KeypressInput): Promise<KeypressResult> {
+    if (input.target) {
+      const page = this.pages.get(input.target.tabId);
+      if (!page) {
+        return {
+          ok: false,
+          error: { code: "stale_ref", message: "No page connection for this tab", target: input.target },
+        };
+      }
+      return page.keypress(input);
+    }
+    const page = this.selectedPage();
+    if (!page) {
+      return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
+    }
+    return page.keypress(input);
   }
 
   async closeTab(tabId: number): Promise<CloseResult> {

@@ -1,7 +1,16 @@
 import type { CloseResult, TabListResult } from "../context";
 import type { AttachResult, NavResult } from "../page";
 import type { GroundedTarget, TabInfo } from "../types";
-import type { BrowserActionResult, BrowserActionRequest, BrowserActionData, ClickResult } from "./types";
+import type {
+  BrowserActionResult,
+  BrowserActionRequest,
+  BrowserActionData,
+  ClearInputResult,
+  ClickResult,
+  KeypressInput,
+  KeypressResult,
+  TypeResult,
+} from "./types";
 
 export interface BrowserActionRuntime {
   selectedTabId: number | null;
@@ -9,6 +18,9 @@ export interface BrowserActionRuntime {
   goBack: () => Promise<NavResult>;
   refresh: () => Promise<NavResult>;
   click: (target: GroundedTarget) => Promise<ClickResult>;
+  type: (target: GroundedTarget, text: string) => Promise<TypeResult>;
+  clearInput: (target: GroundedTarget) => Promise<ClearInputResult>;
+  keypress: (input: KeypressInput) => Promise<KeypressResult>;
   openTab: (url: string) => Promise<AttachResult>;
   switchTab: (tabId: number) => Promise<AttachResult>;
   closeTab: (tabId: number) => Promise<CloseResult>;
@@ -30,6 +42,22 @@ export async function dispatchBrowserAction(
         return await navigationAction("browser_refresh", () => runtime.refresh(), runtime);
       case "browser_click":
         return await clickAction(request.input, runtime);
+      case "browser_type":
+        return await mutatingTargetAction(
+          "browser_type",
+          request.input.target,
+          () => runtime.type(request.input.target, request.input.text),
+          runtime,
+        );
+      case "browser_clear_input":
+        return await mutatingTargetAction(
+          "browser_clear_input",
+          request.input,
+          () => runtime.clearInput(request.input),
+          runtime,
+        );
+      case "browser_keypress":
+        return await keypressAction(request.input, runtime);
       case "browser_open_tab":
         return await tabLifecycleAction(
           "browser_open_tab",
@@ -87,6 +115,50 @@ async function clickAction(target: GroundedTarget, runtime: BrowserActionRuntime
     url: result.url,
     snapshotInvalidated: true,
     data: { kind: "click", newTabId: result.newTabId },
+  };
+}
+
+async function mutatingTargetAction(
+  action: "browser_type" | "browser_clear_input",
+  target: GroundedTarget,
+  run: () => Promise<TypeResult | ClearInputResult>,
+  runtime: BrowserActionRuntime,
+): Promise<BrowserActionResult> {
+  const result = await run();
+  if (!result.ok) {
+    return { ok: false, action, tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action,
+    tabId: target.tabId,
+    url: result.url,
+    snapshotInvalidated: true,
+    data: action === "browser_type" ? { kind: "type" } : { kind: "clear_input" },
+  };
+}
+
+async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
+  const tabId = input.target?.tabId ?? runtime.selectedTabId;
+  if (tabId === null) {
+    return {
+      ok: false,
+      action: "browser_keypress",
+      tabId: null,
+      error: { code: "selected_tab_unavailable", message: "No selected live connection" },
+    };
+  }
+  const result = await runtime.keypress(input);
+  if (!result.ok) {
+    return { ok: false, action: "browser_keypress", tabId: runtime.selectedTabId, error: result.error };
+  }
+  return {
+    ok: true,
+    action: "browser_keypress",
+    tabId,
+    url: result.url,
+    snapshotInvalidated: true,
+    data: { kind: "keypress" },
   };
 }
 

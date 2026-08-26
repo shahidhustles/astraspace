@@ -4,6 +4,8 @@ import {
   type BrowserActionName,
   type BrowserActionRequest,
   type InvalidActionError,
+  type KeypressInput,
+  type KeypressModifiers,
 } from "./types";
 
 export type BrowserActionParseResult =
@@ -48,13 +50,57 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       return parseNoInputRequest(message, "browser_refresh");
     }
     case "browser_click": {
-      const target = parseGroundedTarget(message.input);
+      const target = parseGroundedTarget(message.input, "browser_click");
       if (!target.ok) {
         return invalid("browser_click", target.message);
       }
       return {
         ok: true,
         request: { type: BROWSER_ACTION_MESSAGE, action: "browser_click", input: target.target },
+      };
+    }
+    case "browser_type": {
+      const input = message.input;
+      if (!isRecord(input)) {
+        return invalid("browser_type", "browser_type requires an input object");
+      }
+      if (!hasOnlyKeys(input, ["target", "text"])) {
+        return invalid("browser_type", "browser_type input has unknown fields");
+      }
+      const target = parseGroundedTarget(input.target, "browser_type");
+      if (!target.ok) {
+        return invalid("browser_type", target.message);
+      }
+      if (typeof input.text !== "string" || input.text.length === 0) {
+        return invalid("browser_type", "browser_type requires a non-empty string text");
+      }
+      return {
+        ok: true,
+        request: {
+          type: BROWSER_ACTION_MESSAGE,
+          action: "browser_type",
+          input: { target: target.target, text: input.text },
+        },
+      };
+    }
+    case "browser_clear_input": {
+      const target = parseGroundedTarget(message.input, "browser_clear_input");
+      if (!target.ok) {
+        return invalid("browser_clear_input", target.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_clear_input", input: target.target },
+      };
+    }
+    case "browser_keypress": {
+      const parsed = parseKeypressInput(message.input);
+      if (!parsed.ok) {
+        return invalid("browser_keypress", parsed.message);
+      }
+      return {
+        ok: true,
+        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_keypress", input: parsed.input },
       };
     }
     case "browser_open_tab": {
@@ -110,21 +156,22 @@ function parseNoInputRequest(
 
 function parseGroundedTarget(
   input: unknown,
+  action: "browser_click" | "browser_type" | "browser_clear_input" | "browser_keypress",
 ): { ok: true; target: GroundedTarget } | { ok: false; message: string } {
   if (!isRecord(input)) {
-    return { ok: false, message: "browser_click requires an input object" };
+    return { ok: false, message: `${action} requires an input object` };
   }
   if (!hasOnlyKeys(input, ["tabId", "snapshotId", "ref"])) {
-    return { ok: false, message: "browser_click input has unknown fields" };
+    return { ok: false, message: `${action} input has unknown fields` };
   }
   if (typeof input.tabId !== "number" || !Number.isInteger(input.tabId)) {
-    return { ok: false, message: "browser_click requires an integer tabId" };
+    return { ok: false, message: `${action} requires an integer tabId` };
   }
   if (typeof input.snapshotId !== "string" || input.snapshotId.length === 0) {
-    return { ok: false, message: "browser_click requires a string snapshotId" };
+    return { ok: false, message: `${action} requires a string snapshotId` };
   }
   if (typeof input.ref !== "number" || !Number.isInteger(input.ref) || input.ref <= 0) {
-    return { ok: false, message: "browser_click requires a positive integer ref" };
+    return { ok: false, message: `${action} requires a positive integer ref` };
   }
   return {
     ok: true,
@@ -132,6 +179,63 @@ function parseGroundedTarget(
       tabId: input.tabId,
       snapshotId: input.snapshotId as SnapshotId,
       ref: input.ref,
+    },
+  };
+}
+
+function parseKeypressInput(
+  input: unknown,
+): { ok: true; input: KeypressInput } | { ok: false; message: string } {
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_keypress requires an input object" };
+  }
+  if (!hasOnlyKeys(input, ["key", "modifiers", "target"])) {
+    return { ok: false, message: "browser_keypress input has unknown fields" };
+  }
+  if (typeof input.key !== "string" || input.key.length === 0) {
+    return { ok: false, message: "browser_keypress requires a non-empty string key" };
+  }
+  const modifiers = parseKeypressModifiers(input.modifiers);
+  if (!modifiers.ok) {
+    return modifiers;
+  }
+  if (input.target === undefined) {
+    return { ok: true, input: { key: input.key, modifiers: modifiers.modifiers, target: null } };
+  }
+  const target = parseGroundedTarget(input.target, "browser_keypress");
+  if (!target.ok) {
+    return { ok: false, message: target.message };
+  }
+  return {
+    ok: true,
+    input: { key: input.key, modifiers: modifiers.modifiers, target: target.target },
+  };
+}
+
+function parseKeypressModifiers(
+  input: unknown,
+): { ok: true; modifiers: KeypressModifiers } | { ok: false; message: string } {
+  if (input === undefined) {
+    return { ok: true, modifiers: { alt: false, control: false, meta: false, shift: false } };
+  }
+  if (!isRecord(input)) {
+    return { ok: false, message: "browser_keypress modifiers must be an object" };
+  }
+  if (!hasOnlyKeys(input, ["alt", "control", "meta", "shift"])) {
+    return { ok: false, message: "browser_keypress modifiers has unknown fields" };
+  }
+  for (const name of ["alt", "control", "meta", "shift"] as const) {
+    if (typeof input[name] !== "boolean") {
+      return { ok: false, message: `browser_keypress modifier ${name} must be a boolean` };
+    }
+  }
+  return {
+    ok: true,
+    modifiers: {
+      alt: input.alt as boolean,
+      control: input.control as boolean,
+      meta: input.meta as boolean,
+      shift: input.shift as boolean,
     },
   };
 }

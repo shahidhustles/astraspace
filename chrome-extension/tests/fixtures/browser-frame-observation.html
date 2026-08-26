@@ -44,6 +44,20 @@
       <a id="new-tab-link" href="browser-frame-child.html?role=newtab" target="_blank">New tab action</a>
     </div>
 
+    <div id="input-area" class="section">
+      <input id="text-input" aria-label="Text input" value="existing" />
+      <textarea id="text-area" aria-label="Text area">existing</textarea>
+      <div id="editable-div" aria-label="Editable div" contenteditable="true">existing</div>
+      <input id="readonly-input" aria-label="Read-only input" value="locked" readonly />
+      <input id="disabled-input" aria-label="Disabled input" value="" />
+      <div id="plain-div" aria-label="Plain div" tabindex="0">Not editable</div>
+      <div id="event-input-row">
+        <input id="event-input" aria-label="Event input" value="" />
+        <span id="event-log"></span>
+      </div>
+      <div id="key-log"></div>
+    </div>
+
     <div class="row">
       <iframe
         id="same-origin-frame"
@@ -61,6 +75,10 @@
       shadowButton.type = "button";
       shadowButton.textContent = "Shadow action";
       shadow.appendChild(shadowButton);
+      const shadowInput = document.createElement("input");
+      shadowInput.type = "text";
+      shadowInput.setAttribute("aria-label", "Shadow text input");
+      shadow.appendChild(shadowInput);
       const innerHost = document.createElement("div");
       shadow.appendChild(innerHost);
       const innerShadow = innerHost.attachShadow({ mode: "open" });
@@ -112,6 +130,25 @@
         shadowButton.textContent =
           "Shadow action " + (Number(shadowButton.dataset.count ?? 0) + 1);
         shadowButton.dataset.count = String(Number(shadowButton.dataset.count ?? 0) + 1);
+      });
+
+      const eventInput = document.getElementById("event-input");
+      const eventLog = document.getElementById("event-log");
+      for (const type of ["input", "change"]) {
+        eventInput.addEventListener(type, () => {
+          eventLog.textContent = eventLog.textContent + " " + type + ":" + eventInput.value;
+        });
+      }
+
+      const keyLog = document.getElementById("key-log");
+      document.addEventListener("keydown", (event) => {
+        const parts = [];
+        if (event.ctrlKey) parts.push("ctrl");
+        if (event.altKey) parts.push("alt");
+        if (event.metaKey) parts.push("meta");
+        if (event.shiftKey) parts.push("shift");
+        parts.push(event.key);
+        keyLog.textContent = parts.join("+");
       });
     </script>
   </body>

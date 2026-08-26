@@ -22,6 +22,7 @@
   <body>
     <p>Child frame content.</p>
     <button id="child-action" type="button">Sibling action</button>
+    <input id="child-input" aria-label="Child text input" value="" />
     <div id="child-nested"></div>
     <script>
       const params = new URLSearchParams(location.search);
@@ -29,6 +30,10 @@
       document.getElementById("child-action").textContent = cross
         ? "Cross-origin action"
         : "Same-origin action";
+      document.getElementById("child-input").setAttribute(
+        "aria-label",
+        cross ? "Cross-origin text input" : "Child text input",
+      );
       document.body.dataset.version = params.get("v") || "1";
       if (!cross) {
         const frame = document.createElement("iframe");

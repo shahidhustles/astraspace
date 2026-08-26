@@ -946,3 +946,333 @@ describe("grounded clicking in Chrome", () => {
     30_000,
   );
 });
+
+describe("grounded input and keypress actions in Chrome", () => {
+  const tabId = 4;
+  let browser: Browser;
+  let page: Page;
+  let serverA: ReturnType<typeof Bun.serve>;
+  let serverB: ReturnType<typeof Bun.serve>;
+  let wrapper: BrowserPage;
+  let fixtureUrl: string;
+  let crossOriginUrl: string;
+
+  beforeAll(async () => {
+    const executablePath = requireChromePath();
+    const childHtml = await Bun.file(CHILD_FIXTURE_PATH).text();
+    const grandchildHtml = await Bun.file(GRANDCHILD_FIXTURE_PATH).text();
+
+    serverB = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    crossOriginUrl = `http://localhost:${serverB.port}/browser-frame-child.html?role=cross`;
+
+    const mainHtml = (await Bun.file(FRAME_FIXTURE_PATH).text()).replace(
+      "{{CROSS_ORIGIN_URL}}",
+      crossOriginUrl,
+    );
+    serverA = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-observation.html")) {
+          return new Response(mainHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    fixtureUrl = `http://127.0.0.1:${serverA.port}/browser-frame-observation.html`;
+
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: true,
+      args: ["--no-sandbox", "--site-per-process"],
+      defaultViewport: {
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      },
+    });
+    [page] = await browser.pages();
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+
+    const deps: PageDeps = {
+      connect: async () => browser,
+      connectTab: async () => ({}) as never,
+      timeoutMs: 10_000,
+    };
+    wrapper = new BrowserPage(tabId, fixtureUrl, deps);
+    const attach = await wrapper.attach();
+    if (!attach.ok) {
+      throw new Error("fixture attach failed");
+    }
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    serverA?.stop(true);
+    serverB?.stop(true);
+  });
+
+  async function observeState(): Promise<BrowserState> {
+    const result = await wrapper.observe();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    return result.state as BrowserState;
+  }
+
+  async function freshPage(): Promise<void> {
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  function refByName(state: BrowserState, name: string): BrowserState["refs"][number] {
+    const ref = state.refs.find((candidate) => candidate.name === name);
+    if (!ref) {
+      throw new Error(`no observed ref named ${name}`);
+    }
+    return ref;
+  }
+
+  function targetFor(state: BrowserState, ref: BrowserState["refs"][number]): GroundedTarget {
+    return { tabId, snapshotId: state.snapshotId, ref: ref.ref };
+  }
+
+  function frameByUrl(urlPart: string): Frame {
+    const frame = page.frames().find((candidate) => candidate.url().includes(urlPart));
+    if (!frame) {
+      throw new Error(`no frame with url containing ${urlPart}`);
+    }
+    return frame;
+  }
+
+  test(
+    "typing inserts text without deleting existing content",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.type(targetFor(state, refByName(state, "Text input")), "more");
+      expect(result).toEqual({ ok: true, url: fixtureUrl });
+      const value = await page.evaluate(() => (document.getElementById("text-input") as HTMLInputElement).value);
+      expect(value).toContain("existing");
+      expect(value).toContain("more");
+      expect(value.length).toBe("existing".length + "more".length);
+    },
+    30_000,
+  );
+
+  test(
+    "clear empties input, textarea, and contenteditable controls",
+    async () => {
+      await freshPage();
+      let state = await observeState();
+      const inputResult = await wrapper.clearInput(targetFor(state, refByName(state, "Text input")));
+      expect(inputResult).toEqual({ ok: true, url: fixtureUrl });
+
+      state = await observeState();
+      const textareaResult = await wrapper.clearInput(targetFor(state, refByName(state, "Text area")));
+      expect(textareaResult.ok).toBe(true);
+
+      state = await observeState();
+      const editableResult = await wrapper.clearInput(targetFor(state, refByName(state, "Editable div")));
+      expect(editableResult.ok).toBe(true);
+
+      const cleared = await page.evaluate(() => ({
+        input: (document.getElementById("text-input") as HTMLInputElement).value,
+        textarea: (document.getElementById("text-area") as HTMLTextAreaElement).value,
+        editable: (document.getElementById("editable-div") as HTMLElement).textContent,
+      }));
+      expect(cleared).toEqual({ input: "", textarea: "", editable: "" });
+    },
+    30_000,
+  );
+
+  test(
+    "clear emits observable input and change events",
+    async () => {
+      await freshPage();
+      let state = await observeState();
+      const typed = await wrapper.type(targetFor(state, refByName(state, "Event input")), "abc");
+      expect(typed.ok).toBe(true);
+      const eventLogAfterType = await page.evaluate(() => document.getElementById("event-log")?.textContent ?? "");
+      expect(eventLogAfterType.endsWith(" input:abc")).toBe(true);
+
+      state = await observeState();
+      const cleared = await wrapper.clearInput(targetFor(state, refByName(state, "Event input")));
+      expect(cleared.ok).toBe(true);
+      const eventLogAfterClear = await page.evaluate(() => document.getElementById("event-log")?.textContent ?? "");
+      expect(eventLogAfterClear).toContain("input:");
+      expect(eventLogAfterClear).toContain("change:");
+      const value = await page.evaluate(() => (document.getElementById("event-input") as HTMLInputElement).value);
+      expect(value).toBe("");
+    },
+    30_000,
+  );
+
+  test(
+    "types into an input inside an open shadow root",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.type(targetFor(state, refByName(state, "Shadow text input")), "shadow");
+      expect(result.ok).toBe(true);
+      const value = await page.evaluate(() => {
+        const host = document.getElementById("shadow-host");
+        const input = host?.shadowRoot?.querySelector("input");
+        return input ? (input as HTMLInputElement).value : null;
+      });
+      expect(value).toBe("shadow");
+    },
+    30_000,
+  );
+
+  test(
+    "types into an input inside a cross-origin iframe",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.type(targetFor(state, refByName(state, "Cross-origin text input")), "child");
+      expect(result.ok).toBe(true);
+      const value = await frameByUrl("role=cross").evaluate(
+        () => (document.getElementById("child-input") as HTMLInputElement).value,
+      );
+      expect(value).toBe("child");
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a target disabled after the observation without changing it",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      await page.evaluate(() => {
+        (document.getElementById("disabled-input") as HTMLInputElement).disabled = true;
+      });
+      const result = await wrapper.type(targetFor(state, refByName(state, "Disabled input")), "x");
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "disabled_target", message: "Element is disabled" },
+      });
+      const value = await page.evaluate(() => (document.getElementById("disabled-input") as HTMLInputElement).value);
+      expect(value).toBe("");
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a read-only target without changing it",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.type(targetFor(state, refByName(state, "Read-only input")), "x");
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "read_only_target", message: "Element is read-only" },
+      });
+      const value = await page.evaluate(() => (document.getElementById("readonly-input") as HTMLInputElement).value);
+      expect(value).toBe("locked");
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a non-editable target without changing it",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.type(targetFor(state, refByName(state, "Plain div")), "x");
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "not_interactable", message: "Element is not editable" },
+      });
+      const text = await page.evaluate(() => document.getElementById("plain-div")?.textContent ?? "");
+      expect(text).toBe("Not editable");
+    },
+    30_000,
+  );
+
+  test(
+    "rejects a stale target without changing the page",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const target = targetFor(state, refByName(state, "Text input"));
+      await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+      const result = await wrapper.type(target, "x");
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "stale_ref", message: expect.any(String), target },
+      });
+      const value = await page.evaluate(() => (document.getElementById("text-input") as HTMLInputElement).value);
+      expect(value).toBe("existing");
+    },
+    30_000,
+  );
+
+  test(
+    "a targeted keypress focuses the resolved element",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const result = await wrapper.keypress({
+        key: "Shift",
+        modifiers: { alt: false, control: false, meta: false, shift: false },
+        target: targetFor(state, refByName(state, "Text input")),
+      });
+      expect(result).toEqual({ ok: true, url: fixtureUrl });
+      const activeId = await page.evaluate(() => document.activeElement?.id ?? null);
+      expect(activeId).toBe("text-input");
+    },
+    30_000,
+  );
+
+  test(
+    "a focus-free keypress uses page focus, types a literal plus, and releases modifiers",
+    async () => {
+      await freshPage();
+      const state = await observeState();
+      const combo = await wrapper.keypress({
+        key: "a",
+        modifiers: { alt: false, control: true, meta: false, shift: false },
+        target: null,
+      });
+      expect(combo).toEqual({ ok: true, url: fixtureUrl });
+      expect(await page.evaluate(() => document.getElementById("key-log")?.textContent ?? "")).toBe("ctrl+a");
+
+      const plain = await wrapper.keypress({
+        key: "b",
+        modifiers: { alt: false, control: false, meta: false, shift: false },
+        target: null,
+      });
+      expect(plain.ok).toBe(true);
+      expect(await page.evaluate(() => document.getElementById("key-log")?.textContent ?? "")).toBe("b");
+
+      const plus = await wrapper.keypress({
+        key: "+",
+        modifiers: { alt: false, control: false, meta: false, shift: false },
+        target: null,
+      });
+      expect(plus.ok).toBe(true);
+      expect(await page.evaluate(() => document.getElementById("key-log")?.textContent ?? "")).toBe("+");
+      expect(JSON.parse(JSON.stringify(combo))).toEqual(combo);
+    },
+    30_000,
+  );
+});

@@ -35,7 +35,15 @@ import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
 import { clickGroundedTarget } from "./actions/element";
-import type { ClickResult } from "./actions/types";
+import { clearGroundedTarget, typeGroundedTarget } from "./actions/input";
+import { keypressGroundedTarget } from "./actions/keyboard";
+import type {
+  ClearInputResult,
+  ClickResult,
+  KeypressInput,
+  KeypressResult,
+  TypeResult,
+} from "./actions/types";
 import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
@@ -202,6 +210,31 @@ export class BrowserPage {
       resolveTarget: (resolved) => this.resolveTarget(resolved),
       onCreated: (listener) => this.deps.onCreated?.(listener) ?? (() => {}),
       invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
+  }
+
+  async type(target: GroundedTarget, text: string): Promise<TypeResult> {
+    return typeGroundedTarget(target, text, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
+  }
+
+  async clearInput(target: GroundedTarget): Promise<ClearInputResult> {
+    return clearGroundedTarget(target, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      currentUrl: () => this.puppeteerPage?.url() ?? "",
+    });
+  }
+
+  async keypress(input: KeypressInput): Promise<KeypressResult> {
+    return keypressGroundedTarget(input, {
+      resolveTarget: (resolved) => this.resolveTarget(resolved),
+      invalidate: () => this.snapshots.invalidate(this.tabId),
+      keyboard: () => (this.attached ? (this.puppeteerPage?.keyboard ?? null) : null),
       currentUrl: () => this.puppeteerPage?.url() ?? "",
     });
   }
