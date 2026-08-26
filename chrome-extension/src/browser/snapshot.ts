@@ -1,5 +1,11 @@
 import type { FrameIdentity } from "./document-identity";
-import type { GroundingRecord, ObservedRef, RectBounds } from "./observation/types";
+import type {
+  CommittedGroundingRecord,
+  CommittedObservedRef,
+  GroundingRecord,
+  ObservedRef,
+  RectBounds,
+} from "./observation/types";
 import type { GroundedTarget, SnapshotId, SnapshotIdentity, TargetLookupResult } from "./types";
 
 export interface SnapshotStoreDeps {
@@ -7,10 +13,10 @@ export interface SnapshotStoreDeps {
 }
 
 export interface CommittedSnapshot {
-  identity: SnapshotIdentity;
-  dom: string;
-  refs: readonly ObservedRef[];
-  groundings: readonly GroundingRecord[];
+  readonly identity: Readonly<SnapshotIdentity>;
+  readonly dom: string;
+  readonly refs: readonly CommittedObservedRef[];
+  readonly groundings: readonly CommittedGroundingRecord[];
 }
 
 export interface CommitInput {
@@ -60,8 +66,8 @@ export class SnapshotStore {
         navigationEpoch: input.navigationEpoch,
       }),
       dom: input.dom,
-      refs: freezeRecords(structuredClone(input.refs)),
-      groundings: freezeRecords(structuredClone(input.groundings)),
+      refs: Object.freeze(input.refs.map(freezeObservedRef)),
+      groundings: Object.freeze(input.groundings.map(freezeGroundingRecord)),
     });
     tab.snapshots.set(snapshotId, snapshot);
     tab.nextVersion += 1;
@@ -184,6 +190,23 @@ function sameBounds(a: RectBounds | null, b: RectBounds | null): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 }
 
-function freezeRecords<T extends object>(records: T[]): readonly T[] {
-  return Object.freeze(records.map((record) => Object.freeze(record)));
+function freezeObservedRef(record: ObservedRef): CommittedObservedRef {
+  return Object.freeze({
+    ...record,
+    attrs: Object.freeze({ ...record.attrs }),
+    bounds: freezeBounds(record.bounds),
+  });
+}
+
+function freezeGroundingRecord(record: GroundingRecord): CommittedGroundingRecord {
+  return Object.freeze({
+    ...record,
+    domPath: Object.freeze([...record.domPath]),
+    attrs: Object.freeze({ ...record.attrs }),
+    bounds: freezeBounds(record.bounds),
+  });
+}
+
+function freezeBounds(bounds: RectBounds | null): Readonly<RectBounds> | null {
+  return bounds === null ? null : Object.freeze({ ...bounds });
 }

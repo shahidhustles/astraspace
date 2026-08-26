@@ -50,6 +50,7 @@ export interface StagedObservation {
   screenshot: ViewportCapture;
   documentEpoch: number;
   navigationEpoch: number;
+  connectionGeneration: number;
 }
 
 export type StageResult = { ok: true; staged: StagedObservation } | { ok: false; error: BrowserError };
@@ -65,6 +66,7 @@ export class BrowserPage {
   private puppeteerPage: Page | null = null;
   private identityTracker: MainFrameIdentityTracker | null = null;
   private observationQueue: Promise<void> = Promise.resolve();
+  private connectionGeneration = 0;
 
   constructor(tabId: number, url: string, deps: PageDeps = defaultDeps) {
     this.tabId = tabId;
@@ -109,6 +111,7 @@ export class BrowserPage {
       this.browser = browser;
       this.puppeteerPage = page;
       this.identityTracker = identityTracker;
+      this.connectionGeneration += 1;
       return { ok: true, tabId: this.tabId };
     } catch (error) {
       if (browser) {
@@ -123,6 +126,7 @@ export class BrowserPage {
 
   async disconnect(): Promise<DisconnectResult> {
     const browser = this.browser;
+    this.connectionGeneration += 1;
     this.browser = null;
     this.puppeteerPage = null;
     this.identityTracker?.dispose();
@@ -187,6 +191,7 @@ export class BrowserPage {
     const url = page.url();
     const currentPolicy = enforceUrlPolicy(url);
     if (!currentPolicy.ok) {
+      this.snapshots.invalidate(this.tabId);
       return { ok: false, error: currentPolicy.error };
     }
     const identityBefore = tracker.identity;
@@ -265,6 +270,7 @@ export class BrowserPage {
           screenshot: { mimeType: "image/jpeg", data, ...screenshotDimensions },
           documentEpoch: identityBefore.documentEpoch,
           navigationEpoch: identityBefore.navigationEpoch,
+          connectionGeneration: this.connectionGeneration,
         },
       };
     } catch {
@@ -273,11 +279,19 @@ export class BrowserPage {
   }
 
   commitObservation(staged: StagedObservation): ObserveResult {
-    if (this.identityTracker) {
-      const live = this.identityTracker.identity;
-      if (live.documentEpoch !== staged.documentEpoch || live.navigationEpoch !== staged.navigationEpoch) {
-        return this.failCapture();
-      }
+    const tracker = this.identityTracker;
+    if (
+      !this.attached ||
+      !this.puppeteerPage ||
+      !tracker ||
+      staged.tabId !== this.tabId ||
+      staged.connectionGeneration !== this.connectionGeneration
+    ) {
+      return this.failCapture();
+    }
+    const live = tracker.identity;
+    if (live.documentEpoch !== staged.documentEpoch || live.navigationEpoch !== staged.navigationEpoch) {
+      return this.failCapture();
     }
     const committed = this.snapshots.commit({
       tabId: this.tabId,
@@ -310,10 +324,15 @@ export class BrowserPage {
   }
 
   async resolveTarget(target: GroundedTarget): Promise<TargetResolutionResult> {
-    if (!this.attached || !this.puppeteerPage || !this.identityTracker) {
+    if (target.tabId !== this.tabId || !this.attached || !this.puppeteerPage || !this.identityTracker) {
       return { ok: false, code: "stale_ref", target, reason: "No selected live connection" };
     }
-    return resolveTarget(this.puppeteerPage, this.snapshots, target, this.identityTracker.identity);
+    return resolveTarget(
+      this.puppeteerPage,
+      this.snapshots,
+      target,
+      () => this.identityTracker?.identity ?? null,
+    );
   }
 
   invalidateTargets(): void {
@@ -359,6 +378,7 @@ export class BrowserPage {
 
   private detachIfDisconnected(): void {
     if (this.browser && !this.browser.connected) {
+      this.connectionGeneration += 1;
       this.browser = null;
       this.puppeteerPage = null;
       this.identityTracker?.dispose();

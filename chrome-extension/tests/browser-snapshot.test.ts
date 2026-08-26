@@ -6,7 +6,7 @@ import {
   type CommitResult,
 } from "../src/browser/snapshot";
 import type { FrameIdentity } from "../src/browser/document-identity";
-import type { GroundingRecord, ObservedRef } from "../src/browser/observation/types";
+import type { CommittedGroundingRecord, GroundingRecord, ObservedRef } from "../src/browser/observation/types";
 import type { GroundedTarget, TargetLookupResult } from "../src/browser/types";
 
 function sequencedUuids(): () => string {
@@ -49,7 +49,7 @@ function target(tabId: number, snapshotId: string, ref: number): GroundedTarget 
 
 const LIVE: FrameIdentity = { documentEpoch: 0, navigationEpoch: 0 };
 
-function expectResolved(result: TargetLookupResult): GroundingRecord {
+function expectResolved(result: TargetLookupResult): CommittedGroundingRecord {
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error("expected success");
   return result.grounding;
@@ -311,6 +311,15 @@ describe("SnapshotStore", () => {
     expect(Object.isFrozen(snapshot.identity)).toBe(true);
     expect(Object.isFrozen(snapshot.refs)).toBe(true);
     expect(Object.isFrozen(snapshot.refs[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.refs[0].attrs)).toBe(true);
     expect(Object.isFrozen(snapshot.groundings[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].attrs)).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].domPath)).toBe(true);
+
+    expect(Reflect.set(snapshot.groundings[0].attrs, "type", "reset")).toBe(false);
+    expect(Reflect.set(snapshot.groundings[0].domPath, "0", 9)).toBe(false);
+    const lookup = expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), LIVE));
+    expect(lookup.attrs).toEqual({ type: "submit" });
+    expect(lookup.domPath).toEqual([0]);
   });
 });

@@ -72,6 +72,17 @@ export interface GroundingRecord {
   bounds: RectBounds | null;
 }
 
+export type CommittedObservedRef = Readonly<Omit<ObservedRef, "attrs" | "bounds">> & {
+  readonly attrs: Readonly<Record<string, string>>;
+  readonly bounds: Readonly<RectBounds> | null;
+};
+
+export type CommittedGroundingRecord = Readonly<Omit<GroundingRecord, "domPath" | "attrs" | "bounds">> & {
+  readonly domPath: readonly number[];
+  readonly attrs: Readonly<Record<string, string>>;
+  readonly bounds: Readonly<RectBounds> | null;
+};
+
 export interface RenderedPageContent {
   dom: string;
   refs: ObservedRef[];

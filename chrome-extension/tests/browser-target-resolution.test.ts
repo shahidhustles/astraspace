@@ -41,6 +41,14 @@ const FIXTURE_TWINS = `<!doctype html>
   </body>
 </html>`;
 
+const FIXTURE_MULTILINE = `<!doctype html>
+<html>
+  <head><title>Resolution fixture</title></head>
+  <body>
+    <button id="save" aria-label="Save&#10;report"></button>
+  </body>
+</html>`;
+
 const LAYOUTS: Record<string, Record<string, { x: number; y: number; width: number; height: number }>> = {
   pair: {
     save: { x: 8, y: 8, width: 90, height: 28 },
@@ -53,10 +61,13 @@ const LAYOUTS: Record<string, Record<string, { x: number; y: number; width: numb
     "save-a": { x: 8, y: 8, width: 90, height: 28 },
     "save-b": { x: 8, y: 48, width: 90, height: 28 },
   },
+  multiline: {
+    save: { x: 8, y: 8, width: 90, height: 28 },
+  },
 };
 
-function fixtureWindow(name: "pair" | "single" | "twins"): Window {
-  const fixtures = { pair: FIXTURE_PAIR, single: FIXTURE_SINGLE, twins: FIXTURE_TWINS };
+function fixtureWindow(name: "pair" | "single" | "twins" | "multiline"): Window {
+  const fixtures = { pair: FIXTURE_PAIR, single: FIXTURE_SINGLE, twins: FIXTURE_TWINS, multiline: FIXTURE_MULTILINE };
   const win = new Window({
     url: "https://fixture.test/",
     innerWidth: VIEWPORT_WIDTH,
@@ -107,6 +118,8 @@ interface FakePage extends Page {
   evaluateCalls: number;
   selectorCalls: number;
   evaluateError: Error | null;
+  selectorError: Error | null;
+  selectorHook: (() => void) | null;
 }
 
 function elementHandle(win: Window, element: Element | null): FakeHandle {
@@ -125,6 +138,8 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
     evaluateCalls: 0,
     selectorCalls: 0,
     evaluateError: null,
+    selectorError: null,
+    selectorHook: null,
     url: () => page.currentUrl,
     createCDPSession: async () => session ?? new FakeSession(),
     goto: async () => ({}),
@@ -148,6 +163,10 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
     },
     $$: async (selector: string) => {
       page.selectorCalls += 1;
+      page.selectorHook?.();
+      if (page.selectorError) {
+        throw page.selectorError;
+      }
       return [...win.document.querySelectorAll(selector)].map((el) => elementHandle(win, el));
     },
     accessibility: {
@@ -160,8 +179,9 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
         const role =
           element.getAttribute("role") ??
           (tag === "button" ? "button" : tag === "a" ? "link" : tag === "input" ? "textbox" : null);
-        const name =
+        const rawName =
           (element.textContent ?? "").trim() || element.getAttribute("aria-label") || element.getAttribute("title");
+        const name = rawName?.replace(/\s+/g, " ").trim();
         return { role: role ?? undefined, name: name || undefined };
       },
     },
@@ -289,8 +309,8 @@ describe("target resolution", () => {
     const secondPair = renumbered(rendered, 1, 1);
     const second = commit(store, secondPair.refs, secondPair.groundings);
 
-    const fromFirst = expectResolved(await resolveTarget(page, store, target(first, 1), LIVE));
-    const fromSecond = expectResolved(await resolveTarget(page, store, target(second, 1), LIVE));
+    const fromFirst = expectResolved(await resolveTarget(page, store, target(first, 1), () => LIVE));
+    const fromSecond = expectResolved(await resolveTarget(page, store, target(second, 1), () => LIVE));
 
     expect(await fromFirst.evaluate((el) => (el as Element).id)).toBe("save");
     expect(await fromSecond.evaluate((el) => (el as Element).id)).toBe("link");
@@ -305,7 +325,7 @@ describe("target resolution", () => {
 
     win.document.getElementById("save")?.replaceWith(win.document.createElement("div"));
 
-    const result = await resolveTarget(page, store, target(snapshot, 1), LIVE);
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => LIVE);
     expect(result).toEqual({
       ok: false,
       code: "target_not_found",
@@ -325,7 +345,7 @@ describe("target resolution", () => {
     replacement.textContent = "Discard";
     win.document.getElementById("save")?.replaceWith(replacement);
 
-    const result = await resolveTarget(page, store, target(snapshot, 1), LIVE);
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => LIVE);
     expect(result).toEqual({
       ok: false,
       code: "target_not_found",
@@ -344,8 +364,57 @@ describe("target resolution", () => {
     header.textContent = "Header";
     win.document.body.insertBefore(header, win.document.getElementById("save"));
 
-    const result = expectResolved(await resolveTarget(page, store, target(snapshot, 1), LIVE));
+    const result = expectResolved(await resolveTarget(page, store, target(snapshot, 1), () => LIVE));
     expect(await result.evaluate((el) => (el as Element).id)).toBe("save");
+  });
+
+  test("resolves a target whose allowed attributes contain a newline", async () => {
+    const win = fixtureWindow("multiline");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const page = fakePage(win);
+    const snapshot = commitRendered(store, captureRendered(win));
+
+    const result = expectResolved(await resolveTarget(page, store, target(snapshot, 1), () => LIVE));
+
+    expect(await result.evaluate((el) => (el as Element).id)).toBe("save");
+  });
+
+  test("normalizes a locator failure to target_not_found", async () => {
+    const win = fixtureWindow("single");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const page = fakePage(win);
+    const snapshot = commitRendered(store, captureRendered(win));
+    page.selectorError = new Error("Execution context was destroyed");
+
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => LIVE);
+
+    expect(result).toEqual({
+      ok: false,
+      code: "target_not_found",
+      target: target(snapshot, 1),
+      reason: expect.any(String),
+    });
+  });
+
+  test("returns stale_ref when navigation begins during live resolution", async () => {
+    const win = fixtureWindow("single");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const page = fakePage(win);
+    const snapshot = commitRendered(store, captureRendered(win));
+    let live = LIVE;
+    page.selectorHook = () => {
+      live = { documentEpoch: 1, navigationEpoch: 1 };
+      store.invalidate(7);
+    };
+
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => live);
+
+    expect(result).toEqual({
+      ok: false,
+      code: "stale_ref",
+      target: target(snapshot, 1),
+      reason: expect.any(String),
+    });
   });
 
   test("more than one verified candidate returns ambiguous_ref with no element", async () => {
@@ -354,7 +423,7 @@ describe("target resolution", () => {
     const page = fakePage(win);
     const snapshot = commitRendered(store, captureRendered(win));
 
-    const result = await resolveTarget(page, store, target(snapshot, 1), LIVE);
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => LIVE);
     expect(result).toEqual({
       ok: false,
       code: "ambiguous_ref",
@@ -370,7 +439,7 @@ describe("target resolution", () => {
     const snapshot = commitRendered(store, captureRendered(win));
     store.invalidate(7);
 
-    const result = await resolveTarget(page, store, target(snapshot, 1), LIVE);
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => LIVE);
     expect(result).toEqual({
       ok: false,
       code: "stale_ref",
@@ -390,7 +459,7 @@ describe("target resolution", () => {
       navigationEpoch: 2,
     });
 
-    const result = await resolveTarget(page, store, target(snapshot, 1), { documentEpoch: 0, navigationEpoch: 0 });
+    const result = await resolveTarget(page, store, target(snapshot, 1), () => ({ documentEpoch: 0, navigationEpoch: 0 }));
     expect(result).toEqual({
       ok: false,
       code: "stale_ref",

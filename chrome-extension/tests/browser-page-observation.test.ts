@@ -514,4 +514,50 @@ describe("BrowserPage.observe", () => {
     if (!retry.ok) throw new Error("expected success");
     expect(retry.state.snapshotVersion).toBe(1);
   });
+
+  test("rejects a staged commit after the page disconnects", async () => {
+    const win = fixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps } = fakeDeps(win, "https://fixture.test/", store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+
+    const staged = await wrapper.stageObservation();
+    expect(staged.ok).toBe(true);
+    if (!staged.ok) throw new Error("expected success");
+    await wrapper.disconnect();
+
+    expect(wrapper.commitObservation(staged.staged)).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Page observation failed" },
+    });
+    expect(
+      store.lookup({ tabId: 7, snapshotId: "snap-1" as SnapshotId, ref: 1 }, { documentEpoch: 0, navigationEpoch: 0 }),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
+  });
+
+  test("an unsupported current URL invalidates the previous snapshot", async () => {
+    const win = fixtureWindow();
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { deps, page } = fakeDeps(win, "https://fixture.test/", store);
+    const wrapper = new BrowserPage(7, "https://fixture.test/", deps);
+    await wrapper.attach();
+    const first = await wrapper.observe();
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("expected success");
+
+    page.currentUrl = "chrome://newtab";
+    const failed = await wrapper.observe();
+
+    expect(failed).toEqual({
+      ok: false,
+      error: { code: "unsupported_page", message: "Unsupported browser page", url: "chrome://newtab" },
+    });
+    expect(
+      store.lookup(
+        { tabId: 7, snapshotId: first.state.snapshotId, ref: 1 },
+        { documentEpoch: first.state.documentEpoch, navigationEpoch: first.state.navigationEpoch },
+      ),
+    ).toEqual({ ok: false, code: "stale_ref", target: expect.any(Object), reason: expect.any(String) });
+  });
 });

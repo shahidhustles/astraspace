@@ -832,7 +832,7 @@ describe("BrowserContext", () => {
 
   test("a tab-removal event removes the connection and clears selection only for the selected tab", async () => {
     let nextId = 10;
-    const { context, api } = setup({
+    const { context, api, browsers } = setup({
       createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
     });
 
@@ -849,16 +849,18 @@ describe("BrowserContext", () => {
 
     expect(context.tabCount).toBe(1);
     expect(context.selectedTabId).toBe(11);
+    expect(browsers[0].disconnectCalls).toBe(1);
 
     api.emitRemoved(11);
 
     expect(context.tabCount).toBe(0);
     expect(context.selectedTabId).toBeNull();
+    expect(browsers[1].disconnectCalls).toBe(1);
   });
 
   test("a debugger detach removes only the named connection and allows reattach", async () => {
     let nextId = 10;
-    const { context, api, connectTabCalls } = setup({
+    const { context, api, connectTabCalls, browsers } = setup({
       createTab: async (url) => ({ id: nextId++, url }) as chrome.tabs.Tab,
     });
 
@@ -875,6 +877,7 @@ describe("BrowserContext", () => {
     expect(context.tabCount).toBe(1);
     expect(context.selectedTabId).toBe(11);
     expect(connectTabCalls()).toBe(2);
+    expect(browsers[0].disconnectCalls).toBe(1);
 
     const reopened = context.openTab("https://a.example");
     await Promise.resolve();

@@ -145,6 +145,7 @@ function setup(options: {
   tabs?: chrome.tabs.Tab[];
   allTabs?: chrome.tabs.Tab[];
   page?: (win: Window) => FakePage;
+  queryTabs?: () => Promise<chrome.tabs.Tab[]>;
   queryTabsError?: Error;
   snapshotStore?: SnapshotStore;
 } = {}): FakeDeps {
@@ -163,12 +164,14 @@ function setup(options: {
 
   const context = new BrowserContext({
     queryActiveTab: async () => options.tabs ?? [],
-    queryTabs: async () => {
-      if (options.queryTabsError) {
-        throw options.queryTabsError;
-      }
-      return options.allTabs ?? [];
-    },
+    queryTabs:
+      options.queryTabs ??
+      (async () => {
+        if (options.queryTabsError) {
+          throw options.queryTabsError;
+        }
+        return options.allTabs ?? [];
+      }),
     onUpdated: () => () => {},
     onActivated: () => () => {},
     onRemoved: () => () => {},
@@ -389,5 +392,48 @@ describe("BrowserContext.observe", () => {
       expect(state.dom).toContain("[1]<input role=textbox");
       expect(state.refs.map((r) => r.ref)).toEqual([1, 2, 3]);
     }
+  });
+
+  test("does not commit when the selected tab changes during tab-list assembly", async () => {
+    let releaseTabs: (() => void) | null = null;
+    let reportTabsStarted: (() => void) | null = null;
+    const tabsStarted = new Promise<void>((resolve) => {
+      reportTabsStarted = resolve;
+    });
+    const tabsGate = new Promise<void>((resolve) => {
+      releaseTabs = resolve;
+    });
+    const options: Parameters<typeof setup>[0] = {
+      tabs: activeTab(),
+      snapshotStore: new SnapshotStore({ createUuid: sequencedUuids() }),
+      queryTabs: async () => {
+        reportTabsStarted?.();
+        await tabsGate;
+        return [
+          { id: 7, url: "https://fixture.test/", title: "Context fixture" } as chrome.tabs.Tab,
+          { id: 8, url: "https://other.test/", title: "Other" } as chrome.tabs.Tab,
+        ];
+      },
+    };
+    const { context } = setup(options);
+    await context.useActiveTab();
+
+    const observation = context.observe();
+    await tabsStarted;
+    options.tabs = activeTab({ id: 8, url: "https://other.test/" });
+    await context.useActiveTab();
+    releaseTabs?.();
+
+    expect(await observation).toEqual({
+      ok: false,
+      error: { code: "observation_failed", message: "Browser observation failed" },
+    });
+
+    options.tabs = activeTab();
+    await context.useActiveTab();
+    const retry = await context.observe();
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) throw new Error("expected success");
+    expect(retry.state.snapshotVersion).toBe(1);
   });
 });

@@ -249,6 +249,14 @@ export class BrowserContext {
       };
     }
 
+    if (this.selectedPage() !== page) {
+      page.invalidateTargets();
+      return {
+        ok: false,
+        error: { code: "observation_failed", message: "Browser observation failed" },
+      };
+    }
+
     const committed = page.commitObservation(staged.staged);
     if (!committed.ok) {
       return committed;
@@ -314,19 +322,21 @@ export class BrowserContext {
   }
 
   private handleTabRemoved(tabId: number): void {
-    this.discardTargets(tabId);
-    this.removeTabRecord(tabId);
+    this.discardPage(tabId);
   }
 
   private handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
     if (source.tabId !== undefined) {
-      this.discardTargets(source.tabId);
-      this.removeTabRecord(source.tabId);
+      this.discardPage(source.tabId);
     }
   }
 
-  private discardTargets(tabId: number): void {
-    this.pages.get(tabId)?.invalidateTargets();
+  private discardPage(tabId: number): void {
+    const page = this.pages.get(tabId);
+    this.removeTabRecord(tabId);
+    if (page) {
+      void page.disconnect();
+    }
   }
 
   private removeTabRecord(tabId: number): void {

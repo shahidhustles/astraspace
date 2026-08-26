@@ -1,6 +1,6 @@
 import type { ElementHandle, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { FrameIdentity } from "./document-identity";
-import type { GroundingRecord } from "./observation/types";
+import type { CommittedGroundingRecord } from "./observation/types";
 import type { SnapshotStore } from "./snapshot";
 import type { GroundedTarget, TargetResolutionResult } from "./types";
 
@@ -17,34 +17,69 @@ export async function resolveTarget(
   page: Page,
   store: SnapshotStore,
   target: GroundedTarget,
-  live: FrameIdentity,
+  readLiveIdentity: () => FrameIdentity | null,
 ): Promise<TargetResolutionResult> {
-  const lookup = store.lookup(target, live);
+  const initialIdentity = readLiveIdentity();
+  if (!initialIdentity) {
+    return staleTarget(target, "The page connection is no longer live");
+  }
+  const lookup = store.lookup(target, initialIdentity);
   if (!lookup.ok) {
     return lookup;
   }
-  const candidates = await locateCandidates(page, lookup.grounding);
+  let candidates: ElementHandle[] = [];
   const verified: ElementHandle[] = [];
-  for (const candidate of candidates) {
-    if (await verifyCandidate(page, candidate, lookup.grounding)) {
-      verified.push(candidate);
-    } else {
-      await candidate.dispose();
+  try {
+    candidates = await locateCandidates(page, lookup.grounding);
+    for (const candidate of candidates) {
+      if (await verifyCandidate(page, candidate, lookup.grounding)) {
+        verified.push(candidate);
+      }
     }
+    await disposeElements(candidates.filter((candidate) => !verified.includes(candidate)));
+
+    const finalIdentity = readLiveIdentity();
+    if (!finalIdentity) {
+      await disposeElements(verified);
+      return staleTarget(target, "The page connection changed while resolving the target");
+    }
+    const finalLookup = store.lookup(target, finalIdentity);
+    if (!finalLookup.ok) {
+      await disposeElements(verified);
+      return finalLookup;
+    }
+
+    if (verified.length === 0) {
+      return { ok: false, code: "target_not_found", target, reason: "No live element matches the recorded target" };
+    }
+    if (verified.length > 1) {
+      await disposeElements(verified);
+      return { ok: false, code: "ambiguous_ref", target, reason: "Multiple live elements match the recorded target" };
+    }
+    return { ok: true, element: verified[0] };
+  } catch {
+    await disposeElements(candidates);
+    const finalIdentity = readLiveIdentity();
+    if (!finalIdentity) {
+      return staleTarget(target, "The page connection changed while resolving the target");
+    }
+    const finalLookup = store.lookup(target, finalIdentity);
+    if (!finalLookup.ok) {
+      return finalLookup;
+    }
+    return { ok: false, code: "target_not_found", target, reason: "The live target could not be resolved" };
   }
-  if (verified.length === 0) {
-    return { ok: false, code: "target_not_found", target, reason: "No live element matches the recorded target" };
-  }
-  if (verified.length > 1) {
-    await Promise.all(verified.map((element) => element.dispose()));
-    return { ok: false, code: "ambiguous_ref", target, reason: "Multiple live elements match the recorded target" };
-  }
-  return { ok: true, element: verified[0] };
 }
 
-export async function locateCandidates(page: Page, grounding: GroundingRecord): Promise<ElementHandle[]> {
+export async function locateCandidates(page: Page, grounding: CommittedGroundingRecord): Promise<ElementHandle[]> {
   const pathElement = await resolveDomPath(page, grounding.domPath);
-  const matches = await page.$$(candidateSelector(grounding));
+  let matches: ElementHandle[];
+  try {
+    matches = await page.$$(grounding.tag);
+  } catch (error) {
+    await disposeElements(pathElement ? [pathElement] : []);
+    throw error;
+  }
   if (!pathElement) {
     return matches;
   }
@@ -61,7 +96,7 @@ export async function locateCandidates(page: Page, grounding: GroundingRecord): 
 export async function verifyCandidate(
   page: Page,
   element: ElementHandle,
-  grounding: GroundingRecord,
+  grounding: CommittedGroundingRecord,
 ): Promise<boolean> {
   try {
     const tag = await element.evaluate((node) => node.tagName.toLowerCase());
@@ -100,8 +135,8 @@ export async function verifyCandidate(
   }
 }
 
-async function resolveDomPath(page: Page, domPath: number[]): Promise<ElementHandle | null> {
-  const handle = await page.evaluateHandle((path: number[]) => {
+async function resolveDomPath(page: Page, domPath: readonly number[]): Promise<ElementHandle | null> {
+  const handle = await page.evaluateHandle((path: readonly number[]) => {
     let node: Node | null = document.body;
     for (const index of path) {
       node = node?.childNodes.item(index) ?? null;
@@ -116,18 +151,7 @@ async function resolveDomPath(page: Page, domPath: number[]): Promise<ElementHan
   return element;
 }
 
-function candidateSelector(grounding: GroundingRecord): string {
-  const parts = [grounding.tag];
-  for (const [name, value] of Object.entries(grounding.attrs)) {
-    if (STATE_ATTRIBUTES.has(name)) {
-      continue;
-    }
-    parts.push(`[${name}="${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`);
-  }
-  return parts.join("");
-}
-
-function stableAttributeNames(grounding: GroundingRecord): string[] {
+function stableAttributeNames(grounding: CommittedGroundingRecord): string[] {
   return Object.keys(grounding.attrs).filter((name) => !STATE_ATTRIBUTES.has(name));
 }
 
@@ -141,4 +165,12 @@ function recordedAttrsMatch(live: Record<string, string>, recorded: Record<strin
     }
   }
   return true;
+}
+
+function staleTarget(target: GroundedTarget, reason: string): TargetResolutionResult {
+  return { ok: false, code: "stale_ref", target, reason };
+}
+
+async function disposeElements(elements: ElementHandle[]): Promise<void> {
+  await Promise.all(elements.map((element) => element.dispose().catch(() => {})));
 }

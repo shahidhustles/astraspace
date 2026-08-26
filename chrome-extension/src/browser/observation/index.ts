@@ -43,7 +43,16 @@ import { renderPageContent } from "./render";
 import type { ObservedRef, ViewportMeasurements } from "./types";
 
 export { enrichPageContentWithAccessibility, readJpegDimensions, renderPageContent };
-export type { ExtractedPageContent, GroundingRecord, ObservedRef, ScrollState, ViewportCapture, ViewportMeasurements } from "./types";
+export type {
+  CommittedGroundingRecord,
+  CommittedObservedRef,
+  ExtractedPageContent,
+  GroundingRecord,
+  ObservedRef,
+  ScrollState,
+  ViewportCapture,
+  ViewportMeasurements,
+} from "./types";
 
 function setSource(name: string, values: Iterable<string>): string {
   return `const ${name} = new Set(${JSON.stringify([...values])});`;
