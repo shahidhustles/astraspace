@@ -1,4 +1,9 @@
-import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import type {
+  CDPSession,
+  ElementHandle,
+  Page,
+} from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import type { FrameGraphTracker } from "./document-identity";
 import type { CommittedGroundingRecord, ObservedRef, ScrollState, ViewportCapture } from "./observation/types";
 
 export interface InvalidUrlError {
@@ -105,6 +110,12 @@ export interface GroundedTarget {
   tabId: number;
   snapshotId: SnapshotId;
   ref: number;
+}
+
+export interface ResolutionContext {
+  page: Page;
+  session: CDPSession;
+  tracker: FrameGraphTracker;
 }
 
 export type TargetLookupFailureCode = "stale_ref" | "target_not_found";

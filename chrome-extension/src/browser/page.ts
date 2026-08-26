@@ -348,14 +348,19 @@ export class BrowserPage {
   }
 
   async resolveTarget(target: GroundedTarget): Promise<TargetResolutionResult> {
-    if (target.tabId !== this.tabId || !this.attached || !this.puppeteerPage || !this.identityTracker) {
+    if (
+      target.tabId !== this.tabId ||
+      !this.attached ||
+      !this.puppeteerPage ||
+      !this.identityTracker ||
+      !this.session
+    ) {
       return { ok: false, code: "stale_ref", target, reason: "No selected live connection" };
     }
     return resolveTarget(
-      this.puppeteerPage,
+      { page: this.puppeteerPage, session: this.session, tracker: this.identityTracker },
       this.snapshots,
       target,
-      () => this.identityTracker?.identity ?? null,
     );
   }
 
