@@ -125,6 +125,14 @@ function refNumbersInDom(dom: string): number[] {
   return [...dom.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
 }
 
+function elementAtDomPath(win: Window, domPath: number[]): Element | null {
+  let node: Node | null = win.document.body;
+  for (const index of domPath) {
+    node = node?.childNodes.item(index) ?? null;
+  }
+  return node?.nodeType === 1 ? (node as Element) : null;
+}
+
 describe("renderPageContent", () => {
   test("renders a stable compact tree in document order", () => {
     const { dom } = renderFixture();
@@ -210,6 +218,65 @@ describe("renderPageContent", () => {
     expect(dom).not.toContain("s3cret!");
     expect(JSON.stringify(refs)).not.toContain("s3cret!");
     expect(dom).not.toContain("value=s3cret");
+  });
+
+  test("gives every ref one private grounding record with the matching number and DOM path", () => {
+    const win = fixtureWindow();
+    const { refs, groundings } = renderPageContent(extractPageContent(win));
+
+    expect(groundings).toHaveLength(refs.length);
+    expect(groundings.map((g) => g.ref)).toEqual(refs.map((r) => r.ref));
+    expect(new Set(groundings.map((g) => g.ref)).size).toBe(groundings.length);
+
+    for (const grounding of groundings) {
+      expect(Array.isArray(grounding.domPath)).toBe(true);
+      expect(grounding.domPath.length).toBeGreaterThan(0);
+      expect(grounding.tag).toBeTruthy();
+    }
+
+    const expectedIds = new Map<number, string>([
+      [1, "name"],
+      [2, "pass"],
+      [3, "agree"],
+      [4, "city"],
+      [5, "submit"],
+      [6, "link"],
+      [7, "role-button"],
+      [8, "tab-target"],
+      [9, "wrapped-button"],
+      [10, "nested"],
+      [11, "dup-label-button"],
+      [12, "img-button"],
+      [13, "aria-check"],
+      [14, "aria-labelledby"],
+    ]);
+    const byRef = new Map(groundings.map((g) => [g.ref, g]));
+    for (const [ref, id] of expectedIds) {
+      const grounding = byRef.get(ref);
+      expect(grounding?.domPath, `ref ${ref} grounding`).toBeDefined();
+      if (!grounding) {
+        continue;
+      }
+      expect(elementAtDomPath(win, grounding.domPath)?.id, `ref ${ref} path`).toBe(id);
+    }
+
+    const name = byRef.get(1);
+    expect(name?.name).toBe("Name");
+    expect(name?.attrs).toMatchObject({ type: "text", name: "name" });
+    expect(name?.disabled).toBe(false);
+    expect(name?.bounds).toEqual(LAYOUT.name);
+  });
+
+  test("keeps DOM paths and disabled state out of public ref records", () => {
+    const { refs, groundings } = renderFixture();
+
+    expect(JSON.parse(JSON.stringify(refs))).toEqual(refs);
+    expect(JSON.stringify(refs)).not.toContain("domPath");
+    expect(JSON.stringify(refs)).not.toContain("disabled");
+    expect(refs[0]).not.toHaveProperty("domPath");
+    expect(refs[0]).not.toHaveProperty("disabled");
+
+    expect(JSON.parse(JSON.stringify(groundings))).toEqual(groundings);
   });
 
   test("ref records survive a JSON round trip", () => {

@@ -2,6 +2,7 @@ import type {
   ExtractedElement,
   ExtractedNode,
   ExtractedPageContent,
+  GroundingRecord,
   ObservedRef,
   RenderedPageContent,
 } from "./types";
@@ -67,11 +68,12 @@ const ATTR_ORDER = new Map([
 export function renderPageContent(content: ExtractedPageContent): RenderedPageContent {
   const lines: string[] = [];
   const refs: ObservedRef[] = [];
+  const groundings: GroundingRecord[] = [];
   lines.push("<document>");
   for (const child of content.root.children) {
-    renderNode(child, 1, false, lines, refs);
+    renderNode(child, 1, false, lines, refs, groundings);
   }
-  return { dom: lines.join("\n"), refs };
+  return { dom: lines.join("\n"), refs, groundings };
 }
 
 function renderNode(
@@ -80,6 +82,7 @@ function renderNode(
   textOwned: boolean,
   lines: string[],
   refs: ObservedRef[],
+  groundings: GroundingRecord[],
 ): void {
   if (node.kind === "text") {
     if (!textOwned && node.text) {
@@ -92,8 +95,9 @@ function renderNode(
   if (el.ref !== null) {
     lines.push(`${"  ".repeat(depth)}${formatActionable(el)}`);
     refs.push(toObservedRef(el));
+    groundings.push(toGroundingRecord(el));
     for (const child of el.children) {
-      renderNode(child, depth + 1, true, lines, refs);
+      renderNode(child, depth + 1, true, lines, refs, groundings);
     }
     return;
   }
@@ -101,13 +105,13 @@ function renderNode(
   if (isStructural(el)) {
     lines.push(`${"  ".repeat(depth)}${formatElement(el)}`);
     for (const child of el.children) {
-      renderNode(child, depth + 1, true, lines, refs);
+      renderNode(child, depth + 1, true, lines, refs, groundings);
     }
     return;
   }
 
   for (const child of el.children) {
-    renderNode(child, depth, textOwned, lines, refs);
+    renderNode(child, depth, textOwned, lines, refs, groundings);
   }
 }
 
@@ -212,6 +216,19 @@ function toObservedRef(el: ExtractedElement): ObservedRef {
     role: el.role,
     name: el.name,
     attrs: el.attrs,
+    bounds: el.bounds,
+  };
+}
+
+function toGroundingRecord(el: ExtractedElement): GroundingRecord {
+  return {
+    ref: el.ref as number,
+    domPath: el.domPath,
+    tag: el.tag,
+    role: el.role,
+    name: el.name,
+    attrs: el.attrs,
+    disabled: el.disabled,
     bounds: el.bounds,
   };
 }

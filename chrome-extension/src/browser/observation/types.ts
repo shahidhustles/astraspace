@@ -61,9 +61,21 @@ export interface ObservedRef {
   bounds: RectBounds | null;
 }
 
+export interface GroundingRecord {
+  ref: number;
+  domPath: number[];
+  tag: string;
+  role: string | null;
+  name: string | null;
+  attrs: Record<string, string>;
+  disabled: boolean;
+  bounds: RectBounds | null;
+}
+
 export interface RenderedPageContent {
   dom: string;
   refs: ObservedRef[];
+  groundings: GroundingRecord[];
 }
 
 export interface ViewportCapture {
