@@ -110,6 +110,7 @@ interface FakeHandle {
   element: Element | null;
   asElement: () => FakeHandle | null;
   evaluate: (fn: (...args: unknown[]) => unknown, ...args: unknown[]) => Promise<unknown>;
+  backendNodeId: () => Promise<number>;
   dispose: () => Promise<void>;
 }
 
@@ -128,6 +129,7 @@ function elementHandle(win: Window, element: Element | null): FakeHandle {
     asElement: () => (element ? elementHandle(win, element) : null),
     evaluate: async (fn: (...args: unknown[]) => unknown, ...args: unknown[]) =>
       runInDom(fn, win, [element, ...args.map(unwrap)]),
+    backendNodeId: async () => 1000,
     dispose: async () => {},
   };
 }
@@ -154,10 +156,17 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
       const runner = new Function("window", "document", `return (${expression as string});`);
       return runner(win, win.document);
     },
-    evaluateHandle: async (_fn: unknown, domPath: number[]) => {
+    evaluateHandle: async (
+      _fn: unknown,
+      path: Array<{ kind: "child"; index: number } | { kind: "shadow" }>,
+    ) => {
       let node: Node | null = win.document.body;
-      for (const index of domPath) {
-        node = node?.childNodes.item(index) ?? null;
+      for (const step of path) {
+        if (step.kind === "shadow") {
+          node = node instanceof win.Element ? node.shadowRoot : null;
+        } else {
+          node = node?.childNodes.item(step.index) ?? null;
+        }
       }
       return elementHandle(win, node instanceof win.Element ? node : null);
     },
@@ -188,6 +197,12 @@ function fakePage(win: Window, session?: FakeSession, currentUrl = "https://fixt
     title: async () => "Resolution fixture",
     screenshot: async () => JPEG_BASE64,
   } as FakePage;
+  page.mainFrame = () => ({
+    evaluate: (expression: unknown) => page.evaluate(expression),
+    evaluateHandle: (fn: unknown, arg: unknown) => page.evaluateHandle(fn, arg),
+    childFrames: () => [],
+    frameElement: async () => null,
+  });
   return page;
 }
 
@@ -242,8 +257,13 @@ function sequencedUuids(): () => string {
 }
 
 function captureRendered(win: Window): { refs: ObservedRef[]; groundings: GroundingRecord[] } {
-  const extractFn = evaluateSource(OBSERVE_PAGE_SOURCE) as (win: Window) => ExtractedPageContent;
-  const rendered = renderPageContent(extractFn(win));
+  const extractFn = evaluateSource(OBSERVE_PAGE_SOURCE) as (
+    win: Window,
+    startRef: number,
+    owners: Record<string, string>,
+  ) => { content: ExtractedPageContent; nextRef: number };
+  const { content } = extractFn(win, 1, {});
+  const rendered = renderPageContent(content);
   return { refs: rendered.refs, groundings: rendered.groundings };
 }
 

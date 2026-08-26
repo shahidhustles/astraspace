@@ -6,12 +6,16 @@ import {
   type CommitResult,
 } from "../src/browser/snapshot";
 import type { FrameIdentity } from "../src/browser/document-identity";
-import type { CommittedGroundingRecord, GroundingRecord, ObservedRef } from "../src/browser/observation/types";
+import type { CommittedGroundingRecord, GroundingRecord, ObservedRef, PathStep } from "../src/browser/observation/types";
 import type { GroundedTarget, TargetLookupResult } from "../src/browser/types";
 
 function sequencedUuids(): () => string {
   let next = 0;
   return () => `snap-${(next += 1)}`;
+}
+
+function path(...indexes: number[]): PathStep[] {
+  return indexes.map((index) => ({ kind: "child", index }));
 }
 
 function observed(ref: number, tag: string, overrides: Partial<ObservedRef> = {}): ObservedRef {
@@ -20,11 +24,26 @@ function observed(ref: number, tag: string, overrides: Partial<ObservedRef> = {}
 
 function grounding(
   ref: number,
-  domPath: number[],
+  domPath: PathStep[],
   tag: string,
   overrides: Partial<GroundingRecord> = {},
 ): GroundingRecord {
-  return { ref, domPath, tag, role: null, name: null, attrs: {}, disabled: false, bounds: null, ...overrides };
+  return {
+    ref,
+    domPath,
+    frameLineage: [{ frameId: "main", parentFrameId: null, documentEpoch: 0, navigationEpoch: 0 }],
+    backendNodeId: null,
+    cssSegments: [],
+    xpathSegments: [],
+    text: null,
+    tag,
+    role: null,
+    name: null,
+    attrs: {},
+    disabled: false,
+    bounds: null,
+    ...overrides,
+  };
 }
 
 function commit(
@@ -63,8 +82,8 @@ describe("SnapshotStore", () => {
   test("commits distinct snapshot IDs with increasing versions in commit order", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
 
-    const first = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
-    const second = expectCommitted(commit(store, 1, [observed(1, "a")], [grounding(1, [0], "a")]));
+    const first = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
+    const second = expectCommitted(commit(store, 1, [observed(1, "a")], [grounding(1, path(0), "a")]));
 
     expect(first.identity.snapshotId).toBe("snap-1");
     expect(first.identity.snapshotVersion).toBe(1);
@@ -76,9 +95,9 @@ describe("SnapshotStore", () => {
   test("starts snapshotVersion at 1 for every tab", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
 
-    const tabOne = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
-    const tabTwo = expectCommitted(commit(store, 2, [observed(1, "button")], [grounding(1, [0], "button")]));
-    const tabOneAgain = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    const tabOne = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
+    const tabTwo = expectCommitted(commit(store, 2, [observed(1, "button")], [grounding(1, path(0), "button")]));
+    const tabOneAgain = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
 
     expect(tabOne.identity.snapshotVersion).toBe(1);
     expect(tabTwo.identity.snapshotVersion).toBe(1);
@@ -89,7 +108,7 @@ describe("SnapshotStore", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
 
     const snapshot = expectCommitted(
-      commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")], {
+      commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")], {
         documentEpoch: 3,
         navigationEpoch: 5,
       }),
@@ -105,25 +124,25 @@ describe("SnapshotStore", () => {
 
   test("rejects duplicate ref numbers without committing or consuming a version", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
-    expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
 
     const duplicatedRefs = commit(
       store,
       1,
       [observed(1, "button"), observed(1, "a")],
-      [grounding(1, [0], "button"), grounding(2, [1], "a")],
+      [grounding(1, path(0), "button"), grounding(2, path(1), "a")],
     );
     const duplicatedGroundings = commit(
       store,
       1,
       [observed(1, "button"), observed(2, "a")],
-      [grounding(1, [0], "button"), grounding(1, [1], "a")],
+      [grounding(1, path(0), "button"), grounding(1, path(1), "a")],
     );
 
     expect(duplicatedRefs).toEqual({ ok: false, code: "duplicate_ref" });
     expect(duplicatedGroundings).toEqual({ ok: false, code: "duplicate_ref" });
 
-    const next = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    const next = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
     expect(next.identity.snapshotVersion).toBe(2);
     expect(next.identity.snapshotId).toBe("snap-2");
   });
@@ -131,19 +150,19 @@ describe("SnapshotStore", () => {
   test("rejects non-positive and non-integer ref numbers", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
 
-    expect(commit(store, 1, [observed(0, "button")], [grounding(1, [0], "button")])).toEqual({
+    expect(commit(store, 1, [observed(0, "button")], [grounding(1, path(0), "button")])).toEqual({
       ok: false,
       code: "invalid_ref",
     });
-    expect(commit(store, 1, [observed(-1, "button")], [grounding(1, [0], "button")])).toEqual({
+    expect(commit(store, 1, [observed(-1, "button")], [grounding(1, path(0), "button")])).toEqual({
       ok: false,
       code: "invalid_ref",
     });
-    expect(commit(store, 1, [observed(1.5, "button")], [grounding(1, [0], "button")])).toEqual({
+    expect(commit(store, 1, [observed(1.5, "button")], [grounding(1, path(0), "button")])).toEqual({
       ok: false,
       code: "invalid_ref",
     });
-    expect(commit(store, 1, [observed(1, "button")], [grounding(0, [0], "button")])).toEqual({
+    expect(commit(store, 1, [observed(1, "button")], [grounding(0, path(0), "button")])).toEqual({
       ok: false,
       code: "invalid_ref",
     });
@@ -152,19 +171,19 @@ describe("SnapshotStore", () => {
   test("rejects commits where public refs disagree with private groundings", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
 
-    const differentRefSets = commit(store, 1, [observed(1, "button"), observed(2, "a")], [grounding(1, [0], "button")]);
-    const differentTag = commit(store, 1, [observed(1, "button")], [grounding(1, [0], "a")]);
+    const differentRefSets = commit(store, 1, [observed(1, "button"), observed(2, "a")], [grounding(1, path(0), "button")]);
+    const differentTag = commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "a")]);
     const differentAttrs = commit(
       store,
       1,
       [observed(1, "button", { attrs: { type: "submit" } })],
-      [grounding(1, [0], "button", { attrs: { type: "reset" } })],
+      [grounding(1, path(0), "button", { attrs: { type: "reset" } })],
     );
     const differentBounds = commit(
       store,
       1,
       [observed(1, "button", { bounds: { x: 1, y: 2, width: 3, height: 4 } })],
-      [grounding(1, [0], "button", { bounds: { x: 9, y: 2, width: 3, height: 4 } })],
+      [grounding(1, path(0), "button", { bounds: { x: 9, y: 2, width: 3, height: 4 } })],
     );
 
     expect(differentRefSets).toEqual({ ok: false, code: "mismatched_grounding" });
@@ -191,7 +210,7 @@ describe("SnapshotStore", () => {
         store,
         1,
         [observed(1, "button", { name: "Save", attrs: { type: "submit" } })],
-        [grounding(1, [3, 1], "button", { name: "Save", attrs: { type: "submit" } })],
+        [grounding(1, path(3, 1), "button", { name: "Save", attrs: { type: "submit" } })],
       ),
     );
     const second = expectCommitted(
@@ -199,27 +218,27 @@ describe("SnapshotStore", () => {
         store,
         1,
         [observed(1, "a", { name: "Read more", attrs: { href: "https://example.com" } })],
-        [grounding(1, [7, 0], "a", { name: "Read more", attrs: { href: "https://example.com" } })],
+        [grounding(1, path(7, 0), "a", { name: "Read more", attrs: { href: "https://example.com" } })],
       ),
     );
 
     const fromFirst = expectResolved(store.lookup(target(1, first.identity.snapshotId, 1), LIVE));
     const fromSecond = expectResolved(store.lookup(target(1, second.identity.snapshotId, 1), LIVE));
 
-    expect(fromFirst.domPath).toEqual([3, 1]);
+    expect(fromFirst.domPath).toEqual(path(3, 1));
     expect(fromFirst.tag).toBe("button");
     expect(fromFirst.attrs).toEqual({ type: "submit" });
-    expect(fromSecond.domPath).toEqual([7, 0]);
+    expect(fromSecond.domPath).toEqual(path(7, 0));
     expect(fromSecond.tag).toBe("a");
     expect(fromSecond.attrs).toEqual({ href: "https://example.com" });
   });
 
   test("lookup never falls back to another snapshot, tab, or ref", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
-    const snapshot = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    const snapshot = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
 
     const resolved = expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), LIVE));
-    expect(resolved.domPath).toEqual([0]);
+    expect(resolved.domPath).toEqual(path(0));
 
     expectStale(store.lookup(target(1, "snap-unknown", 1), LIVE), target(1, "snap-unknown", 1));
     expectStale(store.lookup(target(2, snapshot.identity.snapshotId, 1), LIVE), target(2, snapshot.identity.snapshotId, 1));
@@ -237,7 +256,7 @@ describe("SnapshotStore", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
     const committed: CommittedSnapshot[] = [];
     for (let i = 0; i < 9; i += 1) {
-      committed.push(expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")])));
+      committed.push(expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")])));
     }
 
     expectStale(store.lookup(target(1, committed[0].identity.snapshotId, 1), LIVE), target(1, committed[0].identity.snapshotId, 1));
@@ -248,15 +267,15 @@ describe("SnapshotStore", () => {
 
   test("invalidate disables the entire executable cache until a fresh commit", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
-    const first = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
-    const second = expectCommitted(commit(store, 1, [observed(1, "a")], [grounding(1, [0], "a")]));
+    const first = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
+    const second = expectCommitted(commit(store, 1, [observed(1, "a")], [grounding(1, path(0), "a")]));
 
     store.invalidate(1);
 
     expectStale(store.lookup(target(1, first.identity.snapshotId, 1), LIVE), target(1, first.identity.snapshotId, 1));
     expectStale(store.lookup(target(1, second.identity.snapshotId, 1), LIVE), target(1, second.identity.snapshotId, 1));
 
-    const third = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")]));
+    const third = expectCommitted(commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")]));
     expectResolved(store.lookup(target(1, third.identity.snapshotId, 1), LIVE));
     expectResolved(store.lookup(target(1, second.identity.snapshotId, 1), LIVE));
   });
@@ -272,7 +291,7 @@ describe("SnapshotStore", () => {
   test("compares document and navigation epochs before returning a record", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
     const snapshot = expectCommitted(
-      commit(store, 1, [observed(1, "button")], [grounding(1, [0], "button")], {
+      commit(store, 1, [observed(1, "button")], [grounding(1, path(0), "button")], {
         documentEpoch: 2,
         navigationEpoch: 3,
       }),
@@ -296,17 +315,23 @@ describe("SnapshotStore", () => {
   test("committed metadata is frozen and immune to later input mutation", () => {
     const store = new SnapshotStore({ createUuid: sequencedUuids() });
     const refs = [observed(1, "button", { name: "Save", attrs: { type: "submit" } })];
-    const groundings = [grounding(1, [0], "button", { name: "Save", attrs: { type: "submit" } })];
+    const groundings = [grounding(1, path(0), "button", { name: "Save", attrs: { type: "submit" } })];
 
     const snapshot = expectCommitted(commit(store, 1, refs, groundings));
 
     refs.push(observed(2, "a"));
     refs[0].attrs.type = "reset";
-    groundings[0].domPath.push(5);
+    groundings[0].domPath.push({ kind: "child", index: 5 });
+    groundings[0].frameLineage[0].documentEpoch = 9;
+    groundings[0].cssSegments.push("body");
 
     expect(snapshot.refs).toHaveLength(1);
     expect(snapshot.refs[0].attrs).toEqual({ type: "submit" });
-    expect(snapshot.groundings[0].domPath).toEqual([0]);
+    expect(snapshot.groundings[0].domPath).toEqual(path(0));
+    expect(snapshot.groundings[0].frameLineage).toEqual([
+      { frameId: "main", parentFrameId: null, documentEpoch: 0, navigationEpoch: 0 },
+    ]);
+    expect(snapshot.groundings[0].cssSegments).toEqual([]);
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.identity)).toBe(true);
     expect(Object.isFrozen(snapshot.refs)).toBe(true);
@@ -315,11 +340,18 @@ describe("SnapshotStore", () => {
     expect(Object.isFrozen(snapshot.groundings[0])).toBe(true);
     expect(Object.isFrozen(snapshot.groundings[0].attrs)).toBe(true);
     expect(Object.isFrozen(snapshot.groundings[0].domPath)).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].domPath[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].frameLineage)).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].frameLineage[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].cssSegments)).toBe(true);
+    expect(Object.isFrozen(snapshot.groundings[0].xpathSegments)).toBe(true);
 
     expect(Reflect.set(snapshot.groundings[0].attrs, "type", "reset")).toBe(false);
-    expect(Reflect.set(snapshot.groundings[0].domPath, "0", 9)).toBe(false);
+    expect(Reflect.set(snapshot.groundings[0].domPath, "0", { kind: "child", index: 9 })).toBe(false);
+    expect(Reflect.set(snapshot.groundings[0].frameLineage[0], "documentEpoch", 9)).toBe(false);
     const lookup = expectResolved(store.lookup(target(1, snapshot.identity.snapshotId, 1), LIVE));
     expect(lookup.attrs).toEqual({ type: "submit" });
-    expect(lookup.domPath).toEqual([0]);
+    expect(lookup.domPath).toEqual(path(0));
+    expect(lookup.frameLineage[0].documentEpoch).toBe(0);
   });
 });

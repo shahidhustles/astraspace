@@ -2,8 +2,10 @@ import type { FrameIdentity } from "./document-identity";
 import type {
   CommittedGroundingRecord,
   CommittedObservedRef,
+  FrameLineageStep,
   GroundingRecord,
   ObservedRef,
+  PathStep,
   RectBounds,
 } from "./observation/types";
 import type { GroundedTarget, SnapshotId, SnapshotIdentity, TargetLookupResult } from "./types";
@@ -201,10 +203,21 @@ function freezeObservedRef(record: ObservedRef): CommittedObservedRef {
 function freezeGroundingRecord(record: GroundingRecord): CommittedGroundingRecord {
   return Object.freeze({
     ...record,
-    domPath: Object.freeze([...record.domPath]),
+    domPath: Object.freeze(record.domPath.map(freezePathStep)),
+    frameLineage: Object.freeze(record.frameLineage.map(freezeLineageStep)),
+    cssSegments: Object.freeze([...record.cssSegments]),
+    xpathSegments: Object.freeze([...record.xpathSegments]),
     attrs: Object.freeze({ ...record.attrs }),
     bounds: freezeBounds(record.bounds),
   });
+}
+
+function freezePathStep(step: PathStep): Readonly<PathStep> {
+  return Object.freeze({ ...step });
+}
+
+function freezeLineageStep(step: FrameLineageStep): Readonly<FrameLineageStep> {
+  return Object.freeze({ ...step });
 }
 
 function freezeBounds(bounds: RectBounds | null): Readonly<RectBounds> | null {

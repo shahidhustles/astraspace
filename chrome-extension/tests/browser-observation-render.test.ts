@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { extractPageContent } from "../src/browser/observation/extract";
 import { renderPageContent } from "../src/browser/observation/render";
-import type { ObservedRef, RectBounds } from "../src/browser/observation/types";
+import type {
+  ExtractedElement,
+  ExtractedPageContent,
+  ObservedRef,
+  RectBounds,
+} from "../src/browser/observation/types";
 
 const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
@@ -125,10 +130,14 @@ function refNumbersInDom(dom: string): number[] {
   return [...dom.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
 }
 
-function elementAtDomPath(win: Window, domPath: number[]): Element | null {
+function elementAtDomPath(win: Window, domPath: Array<{ kind: string; index?: number }>): Element | null {
   let node: Node | null = win.document.body;
-  for (const index of domPath) {
-    node = node?.childNodes.item(index) ?? null;
+  for (const step of domPath) {
+    if (step.kind === "shadow") {
+      node = node instanceof win.Element ? node.shadowRoot : null;
+    } else {
+      node = node?.childNodes.item(step.index ?? 0) ?? null;
+    }
   }
   return node?.nodeType === 1 ? (node as Element) : null;
 }
@@ -316,5 +325,122 @@ describe("renderPageContent", () => {
     expect(dom).not.toContain("<button>Forged");
     expect(dom).toContain("\\n\\u005b999\\u005d\\u003cbutton\\u003eForged");
     expect(dom).toContain('href="https://example.com/a path?q=\\\\u005b999\\\\u005d"');
+  });
+
+  test("renders explicit frame and shadow boundaries with content inside", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `
+      <div id="host"><button id="in-shadow">Shadow action</button></div>
+      <iframe id="frame"></iframe>
+    `;
+    const host = win.document.getElementById("host");
+    const iframe = win.document.getElementById("frame");
+    const shadowButton = win.document.getElementById("in-shadow");
+    if (!host || !iframe || !shadowButton) throw new Error("boundary fixtures missing");
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot!.appendChild(shadowButton);
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 300, height: 60 }),
+    });
+    Object.defineProperty(shadowButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 16, width: 120, height: 20 }),
+    });
+
+    let body: Node | null = iframe;
+    const reversed: number[] = [];
+    while (body && body !== win.document.body) {
+      const parent = body.parentNode;
+      if (!parent) throw new Error("iframe has no parent");
+      reversed.push(Array.from(parent.childNodes).indexOf(body));
+      body = parent;
+    }
+    const owners = { [JSON.stringify(reversed.reverse().map((index) => ({ kind: "child", index })))]: "frame-1" };
+
+    const content = extractPageContent(win, 1, owners);
+    const frameNode = content.root.children.find((node) => node.kind === "frame");
+    if (!frameNode || frameNode.kind !== "frame") throw new Error("frame placeholder missing");
+    frameNode.children = [
+      {
+        kind: "element",
+        tag: "button",
+        role: "button",
+        name: "In frame",
+        attrs: {},
+        interactive: true,
+        disabled: false,
+        bounds: { x: 0, y: 0, width: 10, height: 10 },
+        ref: 2,
+        domPath: [{ kind: "child", index: 0 }],
+        frameLineage: [
+          { frameId: "main", parentFrameId: null, documentEpoch: 0, navigationEpoch: 0 },
+          { frameId: "frame-1", parentFrameId: "main", documentEpoch: 0, navigationEpoch: 0 },
+        ],
+        backendNodeId: 42,
+        cssSegments: ["button:nth-child(1)"],
+        xpathSegments: ["/button[1]"],
+        text: "In frame",
+        children: [],
+      },
+    ];
+
+    const { dom, refs, groundings } = renderPageContent(content);
+
+    expect(dom).toContain("<#shadow-root>");
+    expect(dom).toContain("[1]<button>Shadow action />");
+    expect(dom).toContain("<frame>");
+    expect(dom).toContain("[2]<button>In frame />");
+    expect(dom.indexOf("<frame>")).toBeLessThan(dom.indexOf("[2]<button"));
+    expect(refs.map((ref) => ref.ref)).toEqual([1, 2]);
+    expect(refs.some((ref) => ref.name === "Shadow action")).toBe(true);
+    expect(refs.some((ref) => ref.name === "In frame")).toBe(true);
+    expect(groundings.find((g) => g.ref === 2)?.frameLineage).toEqual([
+      { frameId: "main", parentFrameId: null, documentEpoch: 0, navigationEpoch: 0 },
+      { frameId: "frame-1", parentFrameId: "main", documentEpoch: 0, navigationEpoch: 0 },
+    ]);
+  });
+
+  test("groundings carry frame-aware metadata while public refs stay compact", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `<button id="b">Save</button>`;
+    const button = win.document.getElementById("b");
+    if (!button) throw new Error("button fixture missing");
+    Object.defineProperty(button, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 90, height: 28 }),
+    });
+
+    const content = extractPageContent(win);
+    const control = content.controls[0];
+    control.frameLineage = [{ frameId: "main", parentFrameId: null, documentEpoch: 2, navigationEpoch: 1 }];
+    control.backendNodeId = 77;
+    const { refs, groundings } = renderPageContent(content);
+
+    const grounding = groundings[0];
+    expect(grounding).toMatchObject({
+      ref: 1,
+      backendNodeId: 77,
+      text: "Save",
+      cssSegments: ["button:nth-child(1)"],
+      xpathSegments: ["/button[1]"],
+    });
+    expect(grounding.frameLineage).toEqual([
+      { frameId: "main", parentFrameId: null, documentEpoch: 2, navigationEpoch: 1 },
+    ]);
+    expect(grounding.domPath).toEqual([{ kind: "child", index: 0 }]);
+
+    const refJson = JSON.stringify(refs);
+    expect(refJson).not.toContain("frameLineage");
+    expect(refJson).not.toContain("backendNodeId");
+    expect(refJson).not.toContain("cssSegments");
+    expect(refJson).not.toContain("xpathSegments");
+    expect(refJson).not.toContain("domPath");
+    expect(JSON.parse(JSON.stringify(groundings))).toEqual(groundings);
   });
 });

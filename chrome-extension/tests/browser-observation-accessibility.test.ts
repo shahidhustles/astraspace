@@ -244,4 +244,43 @@ describe("enrichPageContentWithAccessibility", () => {
     expect(unlabeled?.role).toBe("searchbox");
     expect(unlabeled?.name).toBe("Search");
   });
+
+  test("resolves controls through shadow-root path steps during enrichment", async () => {
+    const win = makeWindow(`<div id="host"></div>`);
+    const host = win.document.getElementById("host");
+    if (!host) throw new Error("host fixture missing");
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot!.innerHTML = `<button id="sb">Save</button>`;
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 200, height: 40 }),
+    });
+    const shadowButton = host.shadowRoot!.querySelector("#sb") as Element;
+    Object.defineProperty(shadowButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 16, width: 90, height: 20 }),
+    });
+
+    const content = extractPageContent(win);
+    const control = content.controls[0];
+    expect(control.domPath).toContainEqual({ kind: "shadow" });
+
+    const walk = (path: Array<{ kind: "child"; index: number } | { kind: "shadow" }>): Node | null => {
+      let node: Node | null = win.document.body;
+      for (const step of path) {
+        if (step.kind === "shadow") {
+          node = node instanceof win.Element ? node.shadowRoot : null;
+        } else {
+          node = node?.childNodes.item(step.index) ?? null;
+        }
+      }
+      return node;
+    };
+
+    await enrichPageContentWithAccessibility(content, async (c) => {
+      const el = walk(c.domPath);
+      return el instanceof win.Element ? { role: "button", name: "Save" } : null;
+    });
+
+    expect(control.role).toBe("button");
+    expect(control.name).toBe("Save");
+  });
 });

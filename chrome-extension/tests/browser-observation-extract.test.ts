@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { extractPageContent } from "../src/browser/observation/extract";
+import { extractFrameContent, extractPageContent } from "../src/browser/observation/extract";
 import type {
   ExtractedElement,
   ExtractedNode,
   ExtractedPageContent,
+  PathStep,
   RectBounds,
 } from "../src/browser/observation/types";
 
@@ -113,7 +114,7 @@ function collectText(nodes: ExtractedNode[], out: string[] = []): string[] {
   for (const node of nodes) {
     if (node.kind === "text") {
       out.push(node.text);
-    } else {
+    } else if (node.kind === "element" || node.kind === "frame" || node.kind === "shadow") {
       collectText(node.children, out);
     }
   }
@@ -393,21 +394,194 @@ describe("extractPageContent", () => {
     expect(content.controls.map((control) => control.name)).toEqual(["Editable"]);
   });
 
-  test("skips iframe and shadow-root content", () => {
+  test("emits frame placeholders bound through the owners map", () => {
     const win = fixtureWindow();
+    setScroll(win, 0, 0);
+
+    const unbound = extractPageContent(win);
+    expect(unbound.root.children.some((node) => node.kind === "frame" && node.frameId === null)).toBe(true);
+    expect(JSON.stringify(unbound)).not.toContain('"iframe"');
+
+    const bound = extractPageContent(win, 1, { [JSON.stringify(placeholderFramePath(win))]: "frame-1" });
+    const frame = bound.root.children.find((node) => node.kind === "frame");
+    expect(frame?.kind).toBe("frame");
+    if (frame?.kind !== "frame") return;
+    expect(frame.frameId).toBe("frame-1");
+  });
+
+  test("traverses open shadow roots and keeps closed shadow content opaque", () => {
+    const win = fixtureWindow();
+    setScroll(win, 0, 0);
+
     const host = win.document.createElement("div");
     host.id = "shadow-host";
     host.textContent = "Shadow wrapper text";
     host.attachShadow({ mode: "open" });
-    host.shadowRoot!.innerHTML = "<button>Shadow button</button>";
+    host.shadowRoot!.innerHTML = `
+      <div id="shadow-inner"><button id="shadow-button">Shadow button</button></div>
+      <button id="shadow-direct">Direct shadow action</button>
+    `;
     win.document.body.appendChild(host);
-    setScroll(win, 0, 0);
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 300, height: 80 }),
+    });
+    const shadowButton = host.shadowRoot!.querySelector("#shadow-button") as Element;
+    const directButton = host.shadowRoot!.querySelector("#shadow-direct") as Element;
+    const shadowInner = host.shadowRoot!.querySelector("#shadow-inner") as Element;
+    Object.defineProperty(shadowInner, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 12, width: 280, height: 40 }),
+    });
+    Object.defineProperty(shadowButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 16, width: 120, height: 20 }),
+    });
+    Object.defineProperty(directButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 48, width: 120, height: 20 }),
+    });
 
     const content = extractPageContent(win);
 
+    const hostNode = content.root.children.find(
+      (node) => node.kind === "element" && (node as ExtractedElement).ref === null,
+    );
+    expect(hostNode).toBeDefined();
+    expect(collectText(content.root.children)).toEqual(
+      expect.arrayContaining(["Shadow wrapper text", "Shadow button", "Direct shadow action"]),
+    );
+
+    const shadowAction = content.controls.find((control) => control.name === "Shadow button");
+    expect(shadowAction?.domPath).toEqual([
+      { kind: "child", index: expect.any(Number) },
+      { kind: "shadow" },
+      { kind: "child", index: expect.any(Number) },
+      { kind: "child", index: expect.any(Number) },
+    ]);
+    const direct = content.controls.find((control) => control.name === "Direct shadow action");
+    expect(direct?.domPath).toEqual([
+      { kind: "child", index: expect.any(Number) },
+      { kind: "shadow" },
+      { kind: "child", index: expect.any(Number) },
+    ]);
+    expect(direct?.ref).not.toBe(shadowAction?.ref);
+
+    const closed = win.document.createElement("div");
+    closed.id = "closed-host";
+    closed.textContent = "Closed wrapper";
+    const closedShadow = closed.attachShadow({ mode: "closed" });
+    closedShadow.innerHTML = "<button>Closed shadow button</button>";
+    win.document.body.appendChild(closed);
+    Object.defineProperty(closed, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 80, width: 200, height: 40 }),
+    });
+
+    const closedContent = extractPageContent(win);
+    const json = JSON.stringify(closedContent);
+    expect(json).toContain("Closed wrapper");
+    expect(json).not.toContain("Closed shadow button");
+    expect(closedContent.controls.some((control) => control.name === "Closed shadow button")).toBe(false);
+  });
+
+  test("threads ref allocation across frame extractors through startRef", () => {
+    const win = fixtureWindow();
+    setScroll(win, 0, 0);
+
+    const first = extractFrameContent(win, 1);
+    expect(first.content.controls.filter((control) => control.ref !== null).map((control) => control.ref)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+    ]);
+    expect(first.nextRef).toBe(13);
+
+    const second = extractFrameContent(win, first.nextRef);
+    expect(second.content.controls.filter((control) => control.ref !== null)[0]?.ref).toBe(13);
+    expect(second.nextRef).toBe(25);
+    const refs = [first, second].flatMap((frame) =>
+      frame.content.controls.filter((control) => control.ref !== null).map((control) => control.ref),
+    );
+    expect(new Set(refs).size).toBe(refs.length);
+  });
+
+  test("records boundary-local locator segments and safe normalized text", () => {
+    const win = fixtureWindow();
+    setScroll(win, 0, 0);
+    const host = win.document.createElement("div");
+    host.id = "shadow-host";
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot!.innerHTML = `<button id="shadow-button">Shadow button</button>`;
+    win.document.body.appendChild(host);
+    Object.defineProperty(host, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 200, height: 40 }),
+    });
+    const shadowButton = host.shadowRoot!.querySelector("#shadow-button") as Element;
+    Object.defineProperty(shadowButton, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 16, width: 120, height: 20 }),
+    });
+
+    const content = extractPageContent(win);
+
+    const shadowAction = content.controls.find((control) => control.name === "Shadow button");
+    expect(shadowAction?.cssSegments).toEqual(["div:nth-child(25)", "button:nth-child(1)"]);
+    expect(shadowAction?.xpathSegments).toEqual(["/div[25]", "/button[1]"]);
+
+    const name = content.controls.find((control) => control.name === "Name");
+    expect(name?.cssSegments).toEqual(["form:nth-child(14) > input:nth-child(2)"]);
+    expect(name?.xpathSegments).toEqual(["/form[14]/input[2]"]);
+    expect(name?.text).toBeNull();
+
+    const submit = content.controls.find((control) => control.name === "Submit");
+    expect(submit?.text).toBe("Submit");
+    expect(submit?.cssSegments).toEqual(["form:nth-child(14) > button:nth-child(9)"]);
+
+    const link = content.controls.find((control) => control.name === "Read more");
+    expect(link?.text).toBe("Read more");
+    expect(link?.cssSegments).toEqual(["a:nth-child(15)"]);
+
+    const pass = content.controls.find((control) => control.name === "Password");
+    expect(pass?.text).toBeNull();
+    expect(pass?.cssSegments.join()).not.toContain("pass");
+  });
+
+  test("keeps sensitive values out of locator segments and text", () => {
+    const win = new Window({
+      url: "https://fixture.test/",
+      innerWidth: VIEWPORT_WIDTH,
+      innerHeight: VIEWPORT_HEIGHT,
+    });
+    win.document.body.innerHTML = `
+      <div id="secret-holder">
+        <input id="otp" name="api_token" autocomplete="one-time-code" value="654321">
+      </div>
+    `;
+    const otp = win.document.getElementById("otp");
+    const holder = win.document.getElementById("secret-holder");
+    if (!otp || !holder) throw new Error("otp fixture missing");
+    Object.defineProperty(holder, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 300, height: 40 }),
+    });
+    Object.defineProperty(otp, "getBoundingClientRect", {
+      value: () => ({ x: 8, y: 8, width: 180, height: 24 }),
+    });
+
+    const content = extractPageContent(win);
+    const control = content.controls[0];
+    expect(control.text).toBeNull();
+    expect(control.cssSegments.join(" ")).not.toContain("api_token");
+    expect(control.xpathSegments.join(" ")).not.toContain("api_token");
+    expect(control.attrs.value).toBeUndefined();
     const json = JSON.stringify(content);
-    expect(json).not.toContain("Shadow wrapper text");
-    expect(json).not.toContain("Shadow button");
-    expect(json).not.toContain('"iframe"');
+    expect(json).not.toContain("654321");
   });
 });
+
+function placeholderFramePath(win: Window): PathStep[] {
+  const frame = win.document.getElementById("frame");
+  const body = win.document.body;
+  if (!frame || !body) throw new Error("frame fixture missing");
+  let node: Node | null = frame;
+  const reversed: PathStep[] = [];
+  while (node && node !== body) {
+    const parent = node.parentNode;
+    if (!parent) throw new Error("frame has no parent");
+    reversed.push({ kind: "child", index: Array.from(parent.childNodes).indexOf(node) });
+    node = parent;
+  }
+  return reversed.reverse();
+}

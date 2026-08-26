@@ -1,11 +1,14 @@
 import type {
   ExtractedElement,
+  ExtractedFrame,
+  ExtractedFrameContent,
   ExtractedNode,
   ExtractedPageContent,
+  PathStep,
   RectBounds,
   ViewportMeasurements,
 } from "./types";
-import { computeAccessibleName, computeRole } from "./accessibility";
+import { collapse, computeAccessibleName, computeRole, descendantText } from "./accessibility";
 
 export const IGNORED_TAGS = new Set([
   "script",
@@ -69,17 +72,33 @@ export const ATTR_ALLOWLIST = new Set([
 export const EDGE_EPSILON = 1;
 export const TEXT_NODE = 3;
 export const ELEMENT_NODE = 1;
+export const SHADOW_ROOT_NODE = 11;
 
-export function extractPageContent(win: Window): ExtractedPageContent {
+export type OwnerMap = Record<string, string>;
+
+export function extractPageContent(
+  win: Window,
+  startRef = 1,
+  owners: OwnerMap = {},
+): ExtractedPageContent {
   const viewport = measureViewport(win);
   const controls: ExtractedElement[] = [];
-  const refCounter = { next: 1 };
+  const refCounter = { next: startRef };
   const rootChildren: ExtractedNode[] = [];
 
   const body = win.document.body;
   if (body) {
     for (const [index, child] of Array.from(body.childNodes).entries()) {
-      const node = visitNode(child, win, viewport, controls, refCounter, false, [index]);
+      const node = visitNode(
+        child,
+        win,
+        viewport,
+        controls,
+        refCounter,
+        false,
+        [{ kind: "child", index }],
+        owners,
+      );
       if (node) {
         rootChildren.push(node);
       }
@@ -98,11 +117,26 @@ export function extractPageContent(win: Window): ExtractedPageContent {
       bounds: null,
       ref: null,
       domPath: [],
+      frameLineage: [],
+      backendNodeId: null,
+      cssSegments: [],
+      xpathSegments: [],
+      text: null,
       children: rootChildren,
     },
     controls,
     viewport,
   };
+}
+
+export function extractFrameContent(
+  win: Window,
+  startRef = 1,
+  owners: OwnerMap = {},
+): ExtractedFrameContent {
+  const content = extractPageContent(win, startRef, owners);
+  const allocated = content.controls.filter((control) => control.ref !== null).length;
+  return { content, nextRef: startRef + allocated };
 }
 
 export function visitNode(
@@ -112,7 +146,8 @@ export function visitNode(
   controls: ExtractedElement[],
   refCounter: { next: number },
   insideActionable: boolean,
-  domPath: number[],
+  domPath: PathStep[],
+  owners: OwnerMap,
 ): ExtractedNode | null {
   if (node.nodeType === TEXT_NODE) {
     const text = node.textContent?.trim() ?? "";
@@ -121,7 +156,7 @@ export function visitNode(
   if (node.nodeType !== ELEMENT_NODE) {
     return null;
   }
-  return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable, domPath);
+  return visitElement(node as Element, win, viewport, controls, refCounter, insideActionable, domPath, owners);
 }
 
 export function visitElement(
@@ -131,13 +166,14 @@ export function visitElement(
   controls: ExtractedElement[],
   refCounter: { next: number },
   insideActionable: boolean,
-  domPath: number[],
-): ExtractedElement | null {
+  domPath: PathStep[],
+  owners: OwnerMap,
+): ExtractedElement | ExtractedFrame | null {
   const tag = el.tagName.toLowerCase();
-  if (IGNORED_TAGS.has(tag) || tag === "iframe") {
-    return null;
+  if (tag === "iframe") {
+    return { kind: "frame", frameId: owners[JSON.stringify(domPath)] ?? null, children: [] };
   }
-  if (el.shadowRoot) {
+  if (IGNORED_TAGS.has(tag)) {
     return null;
   }
   if (tag === "input" && el.getAttribute("type") === "hidden") {
@@ -167,6 +203,7 @@ export function visitElement(
   const disabled = interactive && isDisabled(el);
   const actionable = interactive && !disabled && !insideActionable;
   const sensitive = isSensitiveControl(el, tag);
+  const locators = actionable ? locatorSegments(el, win.document) : null;
   const node: ExtractedElement = {
     kind: "element",
     tag,
@@ -178,6 +215,11 @@ export function visitElement(
     bounds,
     ref: actionable ? refCounter.next++ : null,
     domPath,
+    frameLineage: [],
+    backendNodeId: null,
+    cssSegments: locators?.css ?? [],
+    xpathSegments: locators?.xpath ?? [],
+    text: actionable ? (sensitive ? null : collapse(descendantText(el)) || null) : null,
     children: [],
   };
   if (interactive) {
@@ -187,13 +229,77 @@ export function visitElement(
   const childInsideActionable = insideActionable || actionable;
   if (!sensitive) {
     for (const [index, child] of Array.from(el.childNodes).entries()) {
-      const childNode = visitNode(child, win, viewport, controls, refCounter, childInsideActionable, [...domPath, index]);
+      const childNode = visitNode(
+        child,
+        win,
+        viewport,
+        controls,
+        refCounter,
+        childInsideActionable,
+        [...domPath, { kind: "child", index }],
+        owners,
+      );
       if (childNode) {
         node.children.push(childNode);
       }
     }
+    const shadowRoot = el.shadowRoot;
+    if (shadowRoot) {
+      const shadowChildren: ExtractedNode[] = [];
+      for (const [index, child] of Array.from(shadowRoot.childNodes).entries()) {
+        const childNode = visitNode(
+          child,
+          win,
+          viewport,
+          controls,
+          refCounter,
+          childInsideActionable,
+          [...domPath, { kind: "shadow" }, { kind: "child", index }],
+          owners,
+        );
+        if (childNode) {
+          shadowChildren.push(childNode);
+        }
+      }
+      if (shadowChildren.length > 0) {
+        node.children.push({ kind: "shadow", children: shadowChildren });
+      }
+    }
   }
   return node;
+}
+
+export function locatorSegments(el: Element, doc: Document): { css: string[]; xpath: string[] } {
+  const css: string[][] = [[]];
+  const xpath: string[][] = [[]];
+  let node: Node | null = el;
+  while (node && node !== doc.body) {
+    const parent: Node | null = node.parentNode;
+    if (!parent || (parent.nodeType !== ELEMENT_NODE && parent.nodeType !== SHADOW_ROOT_NODE)) {
+      return { css: [], xpath: [] };
+    }
+    const tag = (node as Element).tagName.toLowerCase();
+    const elementPosition =
+      Array.from(parent.childNodes)
+        .filter((child) => child.nodeType === ELEMENT_NODE)
+        .indexOf(node as ChildNode) + 1;
+    if (elementPosition < 1) {
+      return { css: [], xpath: [] };
+    }
+    css[css.length - 1].push(`${tag}:nth-child(${elementPosition})`);
+    xpath[xpath.length - 1].push(`/${tag}[${elementPosition}]`);
+    if (parent.nodeType === SHADOW_ROOT_NODE) {
+      css.push([]);
+      xpath.push([]);
+      node = (parent as ShadowRoot).host;
+    } else {
+      node = parent;
+    }
+  }
+  return {
+    css: css.reverse().map((segment) => segment.reverse().join(" > ")),
+    xpath: xpath.reverse().map((segment) => segment.reverse().join("")),
+  };
 }
 
 export function rectOf(el: Element): RectBounds | null {

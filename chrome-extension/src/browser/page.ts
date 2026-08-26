@@ -2,9 +2,12 @@ import {
   connect,
   ExtensionTransport,
   type Browser,
+  type CDPSession,
+  type Frame,
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { FrameGraphTracker } from "./document-identity";
+import { FrameGraphTracker, type FrameRecord } from "./document-identity";
+import { bindFrameGraph } from "./frame-binding";
 import {
   buildHighlightOverlayExpression,
   enrichPageContentWithAccessibility,
@@ -12,12 +15,18 @@ import {
   readJpegDimensions,
   removeHighlightOverlayExpression,
   renderPageContent,
+  type ExtractedFrame,
+  type ExtractedFrameContent,
+  type ExtractedNode,
   type ExtractedPageContent,
+  type FrameLineageStep,
   type GroundingRecord,
   type ObservedRef,
+  type PathStep,
   type ScrollState,
   type ViewportCapture,
 } from "./observation";
+import type { OwnerMap } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy } from "./url-policy";
@@ -64,6 +73,7 @@ export class BrowserPage {
   private readonly snapshots: SnapshotStore;
   private browser: Browser | null = null;
   private puppeteerPage: Page | null = null;
+  private session: CDPSession | null = null;
   private identityTracker: FrameGraphTracker | null = null;
   private observationQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
@@ -110,6 +120,7 @@ export class BrowserPage {
       );
       this.browser = browser;
       this.puppeteerPage = page;
+      this.session = session;
       this.identityTracker = identityTracker;
       this.connectionGeneration += 1;
       return { ok: true, tabId: this.tabId };
@@ -129,6 +140,7 @@ export class BrowserPage {
     this.connectionGeneration += 1;
     this.browser = null;
     this.puppeteerPage = null;
+    this.session = null;
     this.identityTracker?.dispose();
     this.identityTracker = null;
     this.snapshots.invalidate(this.tabId);
@@ -195,38 +207,20 @@ export class BrowserPage {
       return { ok: false, error: currentPolicy.error };
     }
     const identityBefore = tracker.identity;
+    const graphVersionBefore = tracker.version;
 
     try {
       const title = await page.title();
-      const content = (await page.evaluate(observePageExpression())) as ExtractedPageContent;
-      const enriched = await enrichPageContentWithAccessibility(content, async (control) => {
-        const handle = await page.evaluateHandle((domPath: number[]) => {
-          let node: Node | null = document.body;
-          for (const index of domPath) {
-            node = node?.childNodes.item(index) ?? null;
-          }
-          return node instanceof Element ? node : null;
-        }, control.domPath);
-        const element = handle.asElement();
-        if (!element) {
-          await handle.dispose();
-          return null;
-        }
-        try {
-          const tag = await element.evaluate((node) =>
-            node instanceof Element ? node.tagName.toLowerCase() : null,
-          );
-          if (tag !== control.tag) {
-            return null;
-          }
-          return await page.accessibility.snapshot({ root: element, interestingOnly: false });
-        } finally {
-          await handle.dispose();
-        }
-      });
-      const rendered = renderPageContent(enriched);
+      const content = await this.extractFrameTree();
+      if (!content) {
+        return this.failCapture();
+      }
+      if (tracker.version !== graphVersionBefore) {
+        return this.failCapture();
+      }
+      const rendered = renderPageContent(content);
       const refs = rendered.refs;
-      const viewport = enriched.viewport;
+      const viewport = content.viewport;
       const captureId = crypto.randomUUID();
 
       let data: string;
@@ -339,6 +333,42 @@ export class BrowserPage {
     this.snapshots.invalidate(this.tabId);
   }
 
+  private async extractFrameTree(): Promise<ExtractedPageContent | null> {
+    const page = this.puppeteerPage;
+    const tracker = this.identityTracker;
+    const session = this.session;
+    if (!page || !tracker || !session) {
+      return null;
+    }
+    const binding = await bindFrameGraph(page, tracker, session);
+    if (!binding.ok) {
+      return null;
+    }
+    const frameById = new Map<string, Frame>();
+    for (const [frame, frameId] of binding.frameIds) {
+      frameById.set(frameId, frame);
+    }
+    const result = await extractFrameRecursive(
+      page.mainFrame(),
+      binding.frameIds,
+      frameById,
+      page,
+      1,
+    );
+    if (!result) {
+      return null;
+    }
+    const mainRecord = tracker.record(tracker.mainFrameId);
+    if (!mainRecord) {
+      return null;
+    }
+    annotateLineages(result.content.root, [toLineageStep(mainRecord)], (frameId) => {
+      const record = tracker.record(frameId);
+      return record ? toLineageStep(record) : null;
+    });
+    return result.content;
+  }
+
   private failCapture(): { ok: false; error: BrowserError } {
     this.snapshots.invalidate(this.tabId);
     return { ok: false, error: { code: "observation_failed", message: "Page observation failed" } };
@@ -381,11 +411,187 @@ export class BrowserPage {
       this.connectionGeneration += 1;
       this.browser = null;
       this.puppeteerPage = null;
+      this.session = null;
       this.identityTracker?.dispose();
       this.identityTracker = null;
       this.snapshots.invalidate(this.tabId);
     }
   }
+}
+
+async function extractFrameRecursive(
+  frame: Frame,
+  frameIds: Map<Frame, string>,
+  frameById: Map<string, Frame>,
+  page: Page,
+  startRef: number,
+): Promise<ExtractedFrameContent | null> {
+  const owners: OwnerMap = {};
+  for (const child of frame.childFrames()) {
+    const childId = frameIds.get(child);
+    if (!childId) {
+      return null;
+    }
+    const owner = await child.frameElement();
+    if (!owner) {
+      return null;
+    }
+    try {
+      const path = await owner.evaluate(pathOfElement);
+      if (path === null) {
+        return null;
+      }
+      owners[JSON.stringify(path)] = childId;
+    } catch {
+      return null;
+    } finally {
+      await owner.dispose();
+    }
+  }
+
+  let raw: ExtractedFrameContent;
+  try {
+    raw = (await frame.evaluate(observePageExpression(startRef, owners))) as ExtractedFrameContent;
+  } catch {
+    return null;
+  }
+
+  const content = await enrichPageContentWithAccessibility(raw.content, async (control) => {
+    const handle = await frame.evaluateHandle(resolveElementAtPath, control.domPath);
+    const element = handle.asElement();
+    if (!element) {
+      await handle.dispose();
+      return null;
+    }
+    try {
+      const tag = await element.evaluate((node) =>
+        node instanceof Element ? node.tagName.toLowerCase() : null,
+      );
+      if (tag !== control.tag) {
+        return null;
+      }
+      control.backendNodeId = await element.backendNodeId();
+      return await page.accessibility.snapshot({ root: element, interestingOnly: false });
+    } finally {
+      await handle.dispose();
+    }
+  });
+
+  let nextRef = raw.nextRef;
+  for (const placeholder of collectFrameNodes(content.root)) {
+    if (!placeholder.frameId) {
+      return null;
+    }
+    const childFrame = frameById.get(placeholder.frameId);
+    if (!childFrame) {
+      return null;
+    }
+    const childResult = await extractFrameRecursive(
+      childFrame,
+      frameIds,
+      frameById,
+      page,
+      nextRef,
+    );
+    if (!childResult) {
+      return null;
+    }
+    placeholder.children = childResult.content.root.children;
+    nextRef = childResult.nextRef;
+  }
+
+  return { content, nextRef };
+}
+
+function collectFrameNodes(root: ExtractedNode, out: ExtractedFrame[] = []): ExtractedFrame[] {
+  if (root.kind === "frame") {
+    out.push(root);
+    return out;
+  }
+  if (root.kind === "element" || root.kind === "shadow") {
+    for (const child of root.children) {
+      collectFrameNodes(child, out);
+    }
+  }
+  return out;
+}
+
+function annotateLineages(
+  node: ExtractedNode,
+  lineage: FrameLineageStep[],
+  stepFor: (frameId: string) => FrameLineageStep | null,
+): void {
+  if (node.kind === "element") {
+    node.frameLineage = lineage;
+    for (const child of node.children) {
+      annotateLineages(child, lineage, stepFor);
+    }
+    return;
+  }
+  if (node.kind === "frame") {
+    if (!node.frameId) {
+      return;
+    }
+    const step = stepFor(node.frameId);
+    if (!step) {
+      return;
+    }
+    const childLineage = [...lineage, step];
+    for (const child of node.children) {
+      annotateLineages(child, childLineage, stepFor);
+    }
+    return;
+  }
+  if (node.kind === "shadow") {
+    for (const child of node.children) {
+      annotateLineages(child, lineage, stepFor);
+    }
+  }
+}
+
+function toLineageStep(record: FrameRecord): FrameLineageStep {
+  return {
+    frameId: record.frameId,
+    parentFrameId: record.parentFrameId,
+    documentEpoch: record.documentEpoch,
+    navigationEpoch: record.navigationEpoch,
+  };
+}
+
+function resolveElementAtPath(path: PathStep[]): Element | null {
+  let node: Node | null = document.body;
+  for (const step of path) {
+    if (step.kind === "shadow") {
+      node = node instanceof Element ? node.shadowRoot : null;
+    } else {
+      node = node?.childNodes.item(step.index) ?? null;
+    }
+  }
+  return node instanceof Element ? node : null;
+}
+
+function pathOfElement(el: Element): PathStep[] | null {
+  const reversed: PathStep[] = [];
+  let node: Node | null = el;
+  const root = document.body;
+  while (node && node !== root) {
+    const parent: Node | null = node.parentNode;
+    if (!parent) {
+      return null;
+    }
+    const index = Array.from(parent.childNodes).indexOf(node as ChildNode);
+    if (index < 0) {
+      return null;
+    }
+    reversed.push({ kind: "child", index });
+    if (parent.nodeType === 11) {
+      reversed.push({ kind: "shadow" });
+      node = (parent as ShadowRoot).host;
+    } else {
+      node = parent;
+    }
+  }
+  return node ? reversed.reverse() : null;
 }
 
 const defaultDeps: PageDeps = {

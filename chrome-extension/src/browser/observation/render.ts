@@ -91,6 +91,22 @@ function renderNode(
     return;
   }
 
+  if (node.kind === "frame") {
+    lines.push(`${"  ".repeat(depth)}<frame>`);
+    for (const child of node.children) {
+      renderNode(child, depth + 1, true, lines, refs, groundings);
+    }
+    return;
+  }
+
+  if (node.kind === "shadow") {
+    lines.push(`${"  ".repeat(depth)}<#shadow-root>`);
+    for (const child of node.children) {
+      renderNode(child, depth + 1, true, lines, refs, groundings);
+    }
+    return;
+  }
+
   const el = node;
   if (el.ref !== null) {
     lines.push(`${"  ".repeat(depth)}${formatActionable(el)}`);
@@ -194,7 +210,7 @@ function ownedText(el: ExtractedElement): string {
   for (const child of el.children) {
     if (child.kind === "text") {
       parts.push(child.text.replace(/\s+/g, " "));
-    } else if (!isStructural(child) && child.ref === null) {
+    } else if (child.kind === "element" && !isStructural(child) && child.ref === null) {
       parts.push(ownedText(child));
     }
   }
@@ -224,6 +240,11 @@ function toGroundingRecord(el: ExtractedElement): GroundingRecord {
   return {
     ref: el.ref as number,
     domPath: el.domPath,
+    frameLineage: el.frameLineage,
+    backendNodeId: el.backendNodeId,
+    cssSegments: el.cssSegments,
+    xpathSegments: el.xpathSegments,
+    text: el.text,
     tag: el.tag,
     role: el.role,
     name: el.name,

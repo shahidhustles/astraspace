@@ -13,6 +13,7 @@ import {
   collectAttrs,
   EDGE_EPSILON,
   ELEMENT_NODE,
+  extractFrameContent,
   extractPageContent,
   IGNORED_TAGS,
   INTERACTIVE_ROLES,
@@ -21,11 +22,14 @@ import {
   isInteractiveElement,
   isOffscreen,
   isSensitiveControl,
+  locatorSegments,
   measureViewport,
   rectOf,
+  SHADOW_ROOT_NODE,
   TEXT_NODE,
   visitElement,
   visitNode,
+  type OwnerMap,
 } from "./extract";
 import {
   BADGE_CLASS,
@@ -46,9 +50,14 @@ export { enrichPageContentWithAccessibility, readJpegDimensions, renderPageConte
 export type {
   CommittedGroundingRecord,
   CommittedObservedRef,
+  ExtractedFrame,
+  ExtractedFrameContent,
+  ExtractedNode,
   ExtractedPageContent,
+  FrameLineageStep,
   GroundingRecord,
   ObservedRef,
+  PathStep,
   ScrollState,
   ViewportCapture,
   ViewportMeasurements,
@@ -67,6 +76,7 @@ const EXTRACT_PREAMBLE = [
   `const EDGE_EPSILON = ${EDGE_EPSILON};`,
   `const TEXT_NODE = ${TEXT_NODE};`,
   `const ELEMENT_NODE = ${ELEMENT_NODE};`,
+  `const SHADOW_ROOT_NODE = ${SHADOW_ROOT_NODE};`,
   computeRole.toString(),
   inputRole.toString(),
   collapse.toString(),
@@ -74,8 +84,10 @@ const EXTRACT_PREAMBLE = [
   associatedLabel.toString(),
   descendantText.toString(),
   extractPageContent.toString(),
+  extractFrameContent.toString(),
   visitNode.toString(),
   visitElement.toString(),
+  locatorSegments.toString(),
   rectOf.toString(),
   isOffscreen.toString(),
   isInteractiveElement.toString(),
@@ -97,9 +109,9 @@ const OVERLAY_PREAMBLE = [
   removeHighlightOverlay.toString(),
 ].join("\n");
 
-export const OBSERVE_PAGE_SOURCE = `(win) => {
+export const OBSERVE_PAGE_SOURCE = `(win, startRef, owners) => {
 ${EXTRACT_PREAMBLE}
-return extractPageContent(win);
+return extractFrameContent(win, startRef, owners);
 }`;
 
 export const BUILD_HIGHLIGHT_OVERLAY_SOURCE = `(doc, refs, viewport, captureId) => {
@@ -112,8 +124,8 @@ ${OVERLAY_PREAMBLE}
 removeHighlightOverlay(doc, captureId);
 }`;
 
-export function observePageExpression(): string {
-  return `(${OBSERVE_PAGE_SOURCE})(window)`;
+export function observePageExpression(startRef = 1, owners: OwnerMap = {}): string {
+  return `(${OBSERVE_PAGE_SOURCE})(window, ${startRef}, ${JSON.stringify(owners)})`;
 }
 
 export function buildHighlightOverlayExpression(

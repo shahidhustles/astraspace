@@ -1,6 +1,6 @@
 import type { ElementHandle, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { FrameIdentity } from "./document-identity";
-import type { CommittedGroundingRecord } from "./observation/types";
+import type { CommittedGroundingRecord, PathStep } from "./observation/types";
 import type { SnapshotStore } from "./snapshot";
 import type { GroundedTarget, TargetResolutionResult } from "./types";
 
@@ -135,11 +135,15 @@ export async function verifyCandidate(
   }
 }
 
-async function resolveDomPath(page: Page, domPath: readonly number[]): Promise<ElementHandle | null> {
-  const handle = await page.evaluateHandle((path: readonly number[]) => {
+async function resolveDomPath(page: Page, domPath: readonly PathStep[]): Promise<ElementHandle | null> {
+  const handle = await page.evaluateHandle((path: readonly PathStep[]) => {
     let node: Node | null = document.body;
-    for (const index of path) {
-      node = node?.childNodes.item(index) ?? null;
+    for (const step of path) {
+      if (step.kind === "shadow") {
+        node = node instanceof Element ? node.shadowRoot : null;
+      } else {
+        node = node?.childNodes.item(step.index) ?? null;
+      }
     }
     return node instanceof Element ? node : null;
   }, domPath);

@@ -25,6 +25,15 @@ export interface ViewportMeasurements {
   scroll: ScrollState;
 }
 
+export type PathStep = { kind: "child"; index: number } | { kind: "shadow" };
+
+export interface FrameLineageStep {
+  frameId: string;
+  parentFrameId: string | null;
+  documentEpoch: number;
+  navigationEpoch: number;
+}
+
 export interface ExtractedText {
   kind: "text";
   text: string;
@@ -40,16 +49,37 @@ export interface ExtractedElement {
   disabled: boolean;
   bounds: RectBounds | null;
   ref: number | null;
-  domPath: number[];
+  domPath: PathStep[];
+  frameLineage: FrameLineageStep[];
+  backendNodeId: number | null;
+  cssSegments: string[];
+  xpathSegments: string[];
+  text: string | null;
   children: ExtractedNode[];
 }
 
-export type ExtractedNode = ExtractedText | ExtractedElement;
+export interface ExtractedFrame {
+  kind: "frame";
+  frameId: string | null;
+  children: ExtractedNode[];
+}
+
+export interface ExtractedShadowRoot {
+  kind: "shadow";
+  children: ExtractedNode[];
+}
+
+export type ExtractedNode = ExtractedText | ExtractedElement | ExtractedFrame | ExtractedShadowRoot;
 
 export interface ExtractedPageContent {
   root: ExtractedElement;
   controls: ExtractedElement[];
   viewport: ViewportMeasurements;
+}
+
+export interface ExtractedFrameContent {
+  content: ExtractedPageContent;
+  nextRef: number;
 }
 
 export interface ObservedRef {
@@ -63,7 +93,12 @@ export interface ObservedRef {
 
 export interface GroundingRecord {
   ref: number;
-  domPath: number[];
+  domPath: PathStep[];
+  frameLineage: FrameLineageStep[];
+  backendNodeId: number | null;
+  cssSegments: string[];
+  xpathSegments: string[];
+  text: string | null;
   tag: string;
   role: string | null;
   name: string | null;
@@ -77,8 +112,13 @@ export type CommittedObservedRef = Readonly<Omit<ObservedRef, "attrs" | "bounds"
   readonly bounds: Readonly<RectBounds> | null;
 };
 
-export type CommittedGroundingRecord = Readonly<Omit<GroundingRecord, "domPath" | "attrs" | "bounds">> & {
-  readonly domPath: readonly number[];
+export type CommittedGroundingRecord = Readonly<
+  Omit<GroundingRecord, "domPath" | "frameLineage" | "cssSegments" | "xpathSegments" | "attrs" | "bounds">
+> & {
+  readonly domPath: readonly PathStep[];
+  readonly frameLineage: readonly FrameLineageStep[];
+  readonly cssSegments: readonly string[];
+  readonly xpathSegments: readonly string[];
   readonly attrs: Readonly<Record<string, string>>;
   readonly bounds: Readonly<RectBounds> | null;
 };

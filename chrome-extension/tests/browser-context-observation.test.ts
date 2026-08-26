@@ -76,38 +76,102 @@ class FakeSession extends EventEmitter {
   async detach(): Promise<void> {}
 }
 
-function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
+class FakeElementHandle {
+  constructor(
+    readonly element: Element | null,
+    readonly win: Window,
+    readonly backendNodeIdValue: number,
+  ) {}
+
+  async evaluate<T>(fn: (node: Node) => T): Promise<T> {
+    if (!this.element) {
+      return null as T;
+    }
+    const source = fn.toString();
+    const runner = new Function(
+      "window",
+      "document",
+      "Element",
+      "HTMLElement",
+      "node",
+      `return (${source})(node);`,
+    );
+    return runner(this.win, this.win.document, this.win.Element, this.win.HTMLElement, this.element) as T;
+  }
+
+  async backendNodeId(): Promise<number> {
+    return this.backendNodeIdValue;
+  }
+
+  async dispose(): Promise<void> {}
+}
+
+class FakeFrame {
+  constructor(
+    readonly win: Window,
+    readonly evaluateCalls: string[],
+    readonly evaluateError: () => Error | null = () => null,
+  ) {}
+
+  childFrames(): FakeFrame[] {
+    return [];
+  }
+
+  async frameElement(): Promise<FakeElementHandle | null> {
+    return null;
+  }
+
+  async evaluate(expression: string): Promise<unknown> {
+    this.evaluateCalls.push(expression);
+    const error = this.evaluateError();
+    if (error) {
+      throw error;
+    }
+    const runner = new Function("window", "document", `return (${expression});`);
+    return runner(this.win, this.win.document);
+  }
+
+  async evaluateHandle(fn: (arg: unknown) => unknown, arg: unknown): Promise<FakeHandleResult> {
+    const source = fn.toString();
+    const runner = new Function(
+      "window",
+      "document",
+      "Element",
+      "ShadowRoot",
+      "arg",
+      `return (${source})(arg);`,
+    );
+    const resolved = runner(this.win, this.win.document, this.win.Element, this.win.ShadowRoot, arg) as
+      | Node
+      | null;
+    return {
+      asElement: () =>
+        resolved && resolved.nodeType === 1
+          ? new FakeElementHandle(resolved as Element, this.win, 1000)
+          : null,
+      dispose: async () => {},
+    };
+  }
+}
+
+interface FakeHandleResult {
+  asElement: () => FakeElementHandle | null;
+  dispose: () => Promise<void>;
+}
+
+function fakePage(win: Window, currentUrl = "https://fixture.test/", evaluateError: Error | null = null): FakePage {
+  const evaluateCalls: string[] = [];
+  let mainFrame: FakeFrame;
   const page = {
     currentUrl,
-    evaluateError: null,
+    evaluateError,
     screenshotCalls: 0,
     screenshotError: null,
     screenshotGate: null,
     url: () => page.currentUrl,
     createCDPSession: async () => new FakeSession(),
-    evaluate: async (expression: string): Promise<unknown> => {
-      if (page.evaluateError) {
-        throw page.evaluateError;
-      }
-      const runner = new Function("window", "document", `return (${expression});`);
-      return runner(win, win.document);
-    },
-    evaluateHandle: async (_fn: unknown, domPath: number[]) => {
-      let node: Node | null = win.document.body;
-      for (const index of domPath) {
-        node = node?.childNodes.item(index) ?? null;
-      }
-      const resolved = node instanceof win.Element ? node : null;
-      return {
-        asElement: () =>
-          resolved
-            ? {
-                evaluate: async () => resolved.tagName.toLowerCase(),
-              }
-            : null,
-        dispose: async () => {},
-      };
-    },
+    mainFrame: () => mainFrame,
+    evaluate: async (expression: string): Promise<unknown> => mainFrame.evaluate(expression),
     title: async () => "Context fixture",
     accessibility: {
       snapshot: async () => null,
@@ -121,6 +185,7 @@ function fakePage(win: Window, currentUrl = "https://fixture.test/"): FakePage {
       return JPEG_BASE64;
     },
   } as FakePage;
+  mainFrame = new FakeFrame(win, evaluateCalls, () => page.evaluateError);
   return page;
 }
 
