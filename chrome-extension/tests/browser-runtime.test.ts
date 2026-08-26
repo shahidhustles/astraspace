@@ -3,6 +3,7 @@ import {
   ATTACH_ACTIVE_TAB_MESSAGE,
   handleBrowserRuntimeMessage,
   OBSERVE_SELECTED_TAB_MESSAGE,
+  type BrowserRuntime,
 } from "../src/browser/runtime";
 import type { BrowserState } from "../src/browser/types";
 
@@ -49,21 +50,29 @@ const OBSERVED_STATE: BrowserState = {
   navigationEpoch: 4,
 };
 
+function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
+  return {
+    selectedTabId: 7,
+    useActiveTab: async () => ({ ok: true, tabId: 7 }),
+    observe: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
+    navigate: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
+    goBack: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
+    refresh: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
+    ...overrides,
+  };
+}
+
 describe("browser runtime messages", () => {
   test("the side-panel attach message invokes active-tab attachment", async () => {
     let calls = 0;
-    const result = await handleBrowserRuntimeMessage(
-      { type: ATTACH_ACTIVE_TAB_MESSAGE },
-      {
-        useActiveTab: async () => {
-          calls += 1;
-          return { ok: true, tabId: 7 };
-        },
-        observe: async () => {
-          throw new Error("observe must not run");
-        },
+    const runtime = fakeRuntime({
+      useActiveTab: async () => {
+        calls += 1;
+        return { ok: true, tabId: 7 };
       },
-    );
+    });
+
+    const result = await handleBrowserRuntimeMessage({ type: ATTACH_ACTIVE_TAB_MESSAGE }, runtime);
 
     expect(result).toEqual({ ok: true, tabId: 7 });
     expect(calls).toBe(1);
@@ -72,19 +81,18 @@ describe("browser runtime messages", () => {
   test("the observe message returns the full browser state unchanged", async () => {
     let observeCalls = 0;
     let attachCalls = 0;
-    const result = await handleBrowserRuntimeMessage(
-      { type: OBSERVE_SELECTED_TAB_MESSAGE },
-      {
-        useActiveTab: async () => {
-          attachCalls += 1;
-          return { ok: true, tabId: 7 };
-        },
-        observe: async () => {
-          observeCalls += 1;
-          return { ok: true, state: OBSERVED_STATE };
-        },
+    const runtime = fakeRuntime({
+      useActiveTab: async () => {
+        attachCalls += 1;
+        return { ok: true, tabId: 7 };
       },
-    );
+      observe: async () => {
+        observeCalls += 1;
+        return { ok: true, state: OBSERVED_STATE };
+      },
+    });
+
+    const result = await handleBrowserRuntimeMessage({ type: OBSERVE_SELECTED_TAB_MESSAGE }, runtime);
 
     expect(result).toEqual({ ok: true, state: OBSERVED_STATE });
     expect(observeCalls).toBe(1);
@@ -105,19 +113,18 @@ describe("browser runtime messages", () => {
   test("unrelated extension messages are ignored", async () => {
     let attachCalls = 0;
     let observeCalls = 0;
-    const result = await handleBrowserRuntimeMessage(
-      { type: "unrelated" },
-      {
-        useActiveTab: async () => {
-          attachCalls += 1;
-          return { ok: true, tabId: 7 };
-        },
-        observe: async () => {
-          observeCalls += 1;
-          return { ok: true, state: OBSERVED_STATE };
-        },
+    const runtime = fakeRuntime({
+      useActiveTab: async () => {
+        attachCalls += 1;
+        return { ok: true, tabId: 7 };
       },
-    );
+      observe: async () => {
+        observeCalls += 1;
+        return { ok: true, state: OBSERVED_STATE };
+      },
+    });
+
+    const result = await handleBrowserRuntimeMessage({ type: "unrelated" }, runtime);
 
     expect(result).toBeNull();
     expect(attachCalls).toBe(0);

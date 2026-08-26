@@ -2,6 +2,7 @@ import { BrowserContext } from "./browser/context";
 import {
   handleBrowserRuntimeMessage,
   isAttachActiveTabMessage,
+  isBrowserActionMessage,
   isObserveSelectedTabMessage,
 } from "./browser/runtime";
 
@@ -10,7 +11,11 @@ export const browserContext = new BrowserContext({
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (!isAttachActiveTabMessage(message) && !isObserveSelectedTabMessage(message)) {
+  if (
+    !isAttachActiveTabMessage(message) &&
+    !isObserveSelectedTabMessage(message) &&
+    !isBrowserActionMessage(message)
+  ) {
     return false;
   }
   void handleBrowserRuntimeMessage(message, browserContext).then(sendResponse);
