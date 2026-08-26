@@ -107,6 +107,10 @@ class FakeElementHandle {
 }
 
 class FakeFrame {
+  accessibility = {
+    snapshot: async (): Promise<null> => null,
+  };
+
   constructor(
     readonly win: Window,
     readonly evaluateCalls: string[],

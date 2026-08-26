@@ -578,7 +578,7 @@ describe("BrowserPage", () => {
     await wrapper.attach();
 
     page.session.emit("Page.frameNavigated", {
-      frame: { id: "sub-1", loaderId: "L2", url: "https://example.com/widget" },
+      frame: { id: "sub-1", parentId: "main-1", loaderId: "L2", url: "https://example.com/widget" },
       type: "Navigation",
     });
 
