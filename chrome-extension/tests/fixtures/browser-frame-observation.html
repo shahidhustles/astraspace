@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frame observation fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 10px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        margin: 10px 0;
+      }
+      iframe {
+        border: 0;
+      }
+      .section {
+        margin: 10px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Frame observation fixture</h1>
+    <button id="main-action" type="button">Main action</button>
+
+    <div id="shadow-host" class="section"></div>
+    <div id="closed-host" class="section"></div>
+
+    <div id="rerender-area" class="section">
+      <button id="rerender-button" type="button">Rerender action</button>
+    </div>
+
+    <div class="row">
+      <iframe
+        id="same-origin-frame"
+        src="browser-frame-child.html?role=same"
+        width="380"
+        height="170"
+      ></iframe>
+      <iframe id="cross-origin-frame" src="{{CROSS_ORIGIN_URL}}" width="380" height="170"></iframe>
+    </div>
+
+    <script>
+      const shadowHost = document.getElementById("shadow-host");
+      const shadow = shadowHost.attachShadow({ mode: "open" });
+      const shadowButton = document.createElement("button");
+      shadowButton.type = "button";
+      shadowButton.textContent = "Shadow action";
+      shadow.appendChild(shadowButton);
+      const innerHost = document.createElement("div");
+      shadow.appendChild(innerHost);
+      const innerShadow = innerHost.attachShadow({ mode: "open" });
+      const innerButton = document.createElement("button");
+      innerButton.type = "button";
+      innerButton.textContent = "Nested shadow action";
+      innerShadow.appendChild(innerButton);
+
+      const closedHost = document.getElementById("closed-host");
+      const closed = closedHost.attachShadow({ mode: "closed" });
+      const closedButton = document.createElement("button");
+      closedButton.type = "button";
+      closedButton.textContent = "Closed shadow action";
+      closed.appendChild(closedButton);
+
+      window.__rerender = (mode) => {
+        const area = document.getElementById("rerender-area");
+        if (mode === "different") {
+          area.innerHTML = '<button id="rerender-button" type="button">Different action</button>';
+          return;
+        }
+        if (mode === "duplicate") {
+          area.innerHTML =
+            '<button type="button">Rerender action</button>' +
+            '<button type="button">Rerender action</button>';
+          return;
+        }
+        area.innerHTML = '<button id="rerender-button" type="button">Rerender action</button>';
+      };
+    </script>
+  </body>
+</html>

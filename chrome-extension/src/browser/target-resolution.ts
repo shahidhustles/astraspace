@@ -232,10 +232,10 @@ export async function verifyCandidate(
     return true;
   }
   const ax = await page.accessibility.snapshot({ root: element, interestingOnly: false });
-  if (grounding.role !== null && ax?.role !== grounding.role) {
+  if (ax?.role !== undefined && grounding.role !== null && ax.role !== grounding.role) {
     return false;
   }
-  if (grounding.name !== null && ax?.name !== grounding.name) {
+  if (ax?.name !== undefined && grounding.name !== null && ax.name !== grounding.name) {
     return false;
   }
   return true;

@@ -2,15 +2,18 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import puppeteer, { type Browser, type Frame, type Page } from "puppeteer-core";
 import { BrowserPage, type PageDeps } from "../src/browser/page";
-import type { BrowserState } from "../src/browser/types";
+import type { BrowserState, GroundedTarget } from "../src/browser/types";
 
 const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
 const DEVICE_SCALE_FACTOR = 2;
 
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-observation.html");
+const FRAME_FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-frame-observation.html");
+const CHILD_FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-frame-child.html");
+const GRANDCHILD_FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-frame-grandchild.html");
 
 const TOP_REF_IDS = ["email", "password", "submit", "nested-link"];
 const BOTTOM_REF_IDS = ["bottom-button", "bottom-link"];
@@ -308,6 +311,403 @@ describe("live viewport synchronization", () => {
       expect(JSON.parse(JSON.stringify(first.result))).toEqual(first.result);
       expect(JSON.parse(JSON.stringify(second.result))).toEqual(second.result);
       expect(await overlayCount()).toBe(0);
+    },
+    30_000,
+  );
+});
+
+describe("frame-aware observation in Chrome", () => {
+  const tabId = 2;
+  let browser: Browser;
+  let page: Page;
+  let serverA: ReturnType<typeof Bun.serve>;
+  let serverB: ReturnType<typeof Bun.serve>;
+  let wrapper: BrowserPage;
+  let fixtureUrl: string;
+  let crossOriginUrl: string;
+
+  beforeAll(async () => {
+    const executablePath = requireChromePath();
+    const childHtml = await Bun.file(CHILD_FIXTURE_PATH).text();
+    const grandchildHtml = await Bun.file(GRANDCHILD_FIXTURE_PATH).text();
+
+    serverB = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    crossOriginUrl = `http://127.0.0.1:${serverB.port}/browser-frame-child.html?role=cross`;
+
+    const mainHtml = (await Bun.file(FRAME_FIXTURE_PATH).text()).replace(
+      "{{CROSS_ORIGIN_URL}}",
+      crossOriginUrl,
+    );
+    serverA = Bun.serve({
+      port: 0,
+      fetch: (request) => {
+        const url = new URL(request.url);
+        if (url.pathname.endsWith("/browser-frame-observation.html")) {
+          return new Response(mainHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-child.html")) {
+          return new Response(childHtml, { headers: { "content-type": "text/html" } });
+        }
+        if (url.pathname.endsWith("/browser-frame-grandchild.html")) {
+          return new Response(grandchildHtml, { headers: { "content-type": "text/html" } });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+    fixtureUrl = `http://127.0.0.1:${serverA.port}/browser-frame-observation.html`;
+
+    browser = await puppeteer.launch({
+      executablePath,
+      headless: true,
+      args: ["--no-sandbox"],
+      defaultViewport: {
+        width: VIEWPORT_WIDTH,
+        height: VIEWPORT_HEIGHT,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      },
+    });
+    [page] = await browser.pages();
+    await freshPage();
+
+    const deps: PageDeps = {
+      connect: async () => browser,
+      connectTab: async () => ({}) as never,
+      timeoutMs: 10_000,
+    };
+    wrapper = new BrowserPage(tabId, fixtureUrl, deps);
+    const attach = await wrapper.attach();
+    if (!attach.ok) {
+      throw new Error("fixture attach failed");
+    }
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    serverA?.stop(true);
+    serverB?.stop(true);
+  });
+
+  async function freshPage(): Promise<void> {
+    await page.goto(fixtureUrl, { waitUntil: "networkidle0" });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function frameByUrl(urlPart: string): Promise<Frame> {
+    const frame = page.frames().find((candidate) => candidate.url().includes(urlPart));
+    if (!frame) {
+      throw new Error(`no frame with url containing ${urlPart}`);
+    }
+    return frame;
+  }
+
+  async function waitForFrameVersion(urlPart: string, expected: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const frame = page.frames().find((candidate) => candidate.url().includes(urlPart));
+      if (frame) {
+        const version = await frame
+          .evaluate(() => document.body?.dataset.version ?? "")
+          .catch(() => "");
+        if (version === expected) {
+          return;
+        }
+      }
+      await sleep(50);
+    }
+    throw new Error(`frame ${urlPart} never reached version ${expected}`);
+  }
+
+  async function waitForFrameGone(urlPart: string): Promise<void> {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      if (!page.frames().some((frame) => frame.url().includes(urlPart))) {
+        return;
+      }
+      await sleep(50);
+    }
+    throw new Error(`frame ${urlPart} never detached`);
+  }
+
+  async function badgesAcrossFrames(): Promise<number[]> {
+    const out: number[] = [];
+    const visit = async (frame: Frame): Promise<void> => {
+      const local = await frame.evaluate(() =>
+        [...document.querySelectorAll(".astra-obs-badge")].map((node) => Number(node.textContent)),
+      );
+      out.push(...local);
+      for (const child of frame.childFrames()) {
+        await visit(child);
+      }
+    };
+    await visit(page.mainFrame());
+    return out;
+  }
+
+  async function observeCollectingLabels(): Promise<{
+    result: Awaited<ReturnType<BrowserPage["observe"]>>;
+    labels: number[][];
+  }> {
+    const realScreenshot = page.screenshot.bind(page);
+    const labels: number[][] = [];
+    page.screenshot = async (options?: Parameters<Page["screenshot"]>[0]) => {
+      labels.push(await badgesAcrossFrames());
+      return realScreenshot(options);
+    };
+    try {
+      const result = await wrapper.observe();
+      return { result, labels };
+    } finally {
+      page.screenshot = realScreenshot;
+    }
+  }
+
+  function refByName(state: BrowserState, name: string): BrowserState["refs"][number] {
+    const ref = state.refs.find((candidate) => candidate.name === name);
+    if (!ref) {
+      throw new Error(`no observed ref named ${name}`);
+    }
+    return ref;
+  }
+
+  function targetFor(state: BrowserState, ref: BrowserState["refs"][number]): GroundedTarget {
+    return { tabId, snapshotId: state.snapshotId, ref: ref.ref };
+  }
+
+  async function elementRectInFrame(
+    urlPart: string,
+    elementId: string,
+  ): Promise<{ x: number; y: number; width: number; height: number }> {
+    const frame = await frameByUrl(urlPart);
+    return frame.evaluate((id) => {
+      const rect = document.getElementById(id)?.getBoundingClientRect();
+      return {
+        x: Math.round(rect?.x ?? 0),
+        y: Math.round(rect?.y ?? 0),
+        width: Math.round(rect?.width ?? 0),
+        height: Math.round(rect?.height ?? 0),
+      };
+    }, elementId);
+  }
+
+  async function frameElementRect(elementId: string): Promise<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }> {
+    return page.evaluate((id) => {
+      const rect = document.getElementById(id)?.getBoundingClientRect();
+      return {
+        x: Math.round(rect?.x ?? 0),
+        y: Math.round(rect?.y ?? 0),
+        width: Math.round(rect?.width ?? 0),
+        height: Math.round(rect?.height ?? 0),
+      };
+    }, elementId);
+  }
+
+  test(
+    "one observation returns unique refs and aligned labels for every frame and shadow root",
+    async () => {
+      await freshPage();
+      const { result, labels } = await observeCollectingLabels();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected success");
+      const state = result.state as BrowserState;
+
+      const refs = state.refs.map((ref) => ref.ref);
+      expect(new Set(refs).size).toBe(refs.length);
+
+      expect(refByName(state, "Main action")).toBeDefined();
+      expect(refByName(state, "Same-origin action")).toBeDefined();
+      expect(refByName(state, "Cross-origin action")).toBeDefined();
+      expect(refByName(state, "Grandchild action")).toBeDefined();
+      expect(refByName(state, "Shadow action")).toBeDefined();
+      expect(refByName(state, "Nested shadow action")).toBeDefined();
+      expect(refByName(state, "Rerender action")).toBeDefined();
+
+      expect(state.dom).toContain("<frame>");
+      expect(state.dom).toContain("<#shadow-root>");
+      expect(state.dom).not.toContain("Closed shadow action");
+      expect(state.refs.some((ref) => ref.name === "Closed shadow action")).toBe(false);
+
+      expect(labels).toEqual([refs]);
+      expect(await badgesAcrossFrames()).toEqual([]);
+
+      const mainExpected = await frameElementRect("main-action");
+      expect(refByName(state, "Main action").bounds).toEqual(mainExpected);
+
+      const crossOwner = await frameElementRect("cross-origin-frame");
+      const crossButton = await elementRectInFrame("role=cross", "child-action");
+      expect(refByName(state, "Cross-origin action").bounds).toEqual({
+        x: crossOwner.x + crossButton.x,
+        y: crossOwner.y + crossButton.y,
+        width: crossButton.width,
+        height: crossButton.height,
+      });
+
+      const sameOwner = await frameElementRect("same-origin-frame");
+      const grandOwner = await elementRectInFrame("role=same", "grandchild-frame");
+      const grandButton = await elementRectInFrame("browser-frame-grandchild", "grandchild-action");
+      expect(refByName(state, "Grandchild action").bounds).toEqual({
+        x: sameOwner.x + grandOwner.x + grandButton.x,
+        y: sameOwner.y + grandOwner.y + grandButton.y,
+        width: grandButton.width,
+        height: grandButton.height,
+      });
+
+      expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    },
+    30_000,
+  );
+
+  test(
+    "navigating one child frame stales only its own lineage and recovers after a new observation",
+    async () => {
+      await freshPage();
+      const { result } = await observeCollectingLabels();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected success");
+      const state = result.state as BrowserState;
+
+      const mainRef = refByName(state, "Main action");
+      const sameRef = refByName(state, "Same-origin action");
+      const grandRef = refByName(state, "Grandchild action");
+      const crossRef = refByName(state, "Cross-origin action");
+
+      await page.evaluate(() => {
+        const element = document.getElementById("same-origin-frame") as HTMLIFrameElement;
+        element.src = "browser-frame-child.html?role=same&v=2";
+      });
+      await waitForFrameVersion("role=same", "2");
+      await sleep(200);
+
+      const mainResult = await wrapper.resolveTarget(targetFor(state, mainRef));
+      expect(mainResult.ok).toBe(true);
+      if (mainResult.ok) {
+        const text = await mainResult.element.evaluate((element) => element.textContent);
+        expect(text).toBe("Main action");
+      }
+
+      const crossResult = await wrapper.resolveTarget(targetFor(state, crossRef));
+      expect(crossResult.ok).toBe(true);
+
+      const sameResult = await wrapper.resolveTarget(targetFor(state, sameRef));
+      expect(sameResult.ok).toBe(false);
+      if (!sameResult.ok) {
+        expect(sameResult.code).toBe("stale_ref");
+      }
+
+      const grandResult = await wrapper.resolveTarget(targetFor(state, grandRef));
+      expect(grandResult.ok).toBe(false);
+      if (!grandResult.ok) {
+        expect(grandResult.code).toBe("stale_ref");
+      }
+
+      const again = await observeCollectingLabels();
+      expect(again.result.ok).toBe(true);
+      if (!again.result.ok) throw new Error("expected success");
+      const recovered = refByName(again.result.state as BrowserState, "Same-origin action");
+      const recoveredResult = await wrapper.resolveTarget(
+        targetFor(again.result.state as BrowserState, recovered),
+      );
+      expect(recoveredResult.ok).toBe(true);
+    },
+    30_000,
+  );
+
+  test(
+    "detaching a sibling frame stales its own controls while main and other lineages stay eligible",
+    async () => {
+      await freshPage();
+      const { result } = await observeCollectingLabels();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected success");
+      const state = result.state as BrowserState;
+
+      const mainRef = refByName(state, "Main action");
+      const sameRef = refByName(state, "Same-origin action");
+      const crossRef = refByName(state, "Cross-origin action");
+
+      await page.evaluate(() => {
+        document.getElementById("cross-origin-frame")?.remove();
+      });
+      await waitForFrameGone("role=cross");
+      await sleep(200);
+
+      const mainResult = await wrapper.resolveTarget(targetFor(state, mainRef));
+      expect(mainResult.ok).toBe(true);
+
+      const sameResult = await wrapper.resolveTarget(targetFor(state, sameRef));
+      expect(sameResult.ok).toBe(true);
+
+      const crossResult = await wrapper.resolveTarget(targetFor(state, crossRef));
+      expect(crossResult.ok).toBe(false);
+      if (!crossResult.ok) {
+        expect(crossResult.code).toBe("stale_ref");
+      }
+
+      const again = await observeCollectingLabels();
+      expect(again.result.ok).toBe(true);
+      if (!again.result.ok) throw new Error("expected success");
+      const next = again.result.state as BrowserState;
+      expect(next.dom).not.toContain("Cross-origin action");
+      expect(next.refs.some((ref) => ref.name === "Cross-origin action")).toBe(false);
+    },
+    30_000,
+  );
+
+  test(
+    "a rerender keeps verified fallback while a different or ambiguous replacement returns no handle",
+    async () => {
+      await freshPage();
+      const { result } = await observeCollectingLabels();
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("expected success");
+      const state = result.state as BrowserState;
+      const rerenderRef = refByName(state, "Rerender action");
+      const target = targetFor(state, rerenderRef);
+
+      await page.evaluate(() => window.__rerender("same"));
+      await sleep(200);
+      const recovered = await wrapper.resolveTarget(target);
+      expect(recovered.ok).toBe(true);
+      if (recovered.ok) {
+        const text = await recovered.element.evaluate((element) => element.textContent);
+        expect(text).toBe("Rerender action");
+      }
+
+      await page.evaluate(() => window.__rerender("different"));
+      await sleep(200);
+      const different = await wrapper.resolveTarget(target);
+      expect(different.ok).toBe(false);
+      if (!different.ok) {
+        expect(different.code).toBe("target_not_found");
+      }
+
+      await page.evaluate(() => window.__rerender("duplicate"));
+      await sleep(200);
+      const duplicate = await wrapper.resolveTarget(target);
+      expect(duplicate.ok).toBe(false);
+      if (!duplicate.ok) {
+        expect(duplicate.code).toBe("ambiguous_ref");
+      }
     },
     30_000,
   );

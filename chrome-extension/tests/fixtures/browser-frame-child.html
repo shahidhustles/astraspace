@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Frame child fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        padding: 8px;
+      }
+      p {
+        margin: 0 0 6px;
+        font-size: 12px;
+      }
+      #grandchild-frame {
+        border: 0;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <p>Child frame content.</p>
+    <button id="child-action" type="button">Sibling action</button>
+    <div id="child-nested"></div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const cross = params.get("role") === "cross";
+      document.getElementById("child-action").textContent = cross
+        ? "Cross-origin action"
+        : "Same-origin action";
+      document.body.dataset.version = params.get("v") || "1";
+      if (!cross) {
+        const frame = document.createElement("iframe");
+        frame.id = "grandchild-frame";
+        frame.src = "browser-frame-grandchild.html";
+        frame.width = "340";
+        frame.height = "90";
+        document.getElementById("child-nested").appendChild(frame);
+      }
+    </script>
+  </body>
+</html>

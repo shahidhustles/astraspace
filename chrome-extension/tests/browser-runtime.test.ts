@@ -14,8 +14,34 @@ const OBSERVED_STATE: BrowserState = {
     { tabId: 7, url: "https://example.com", title: "Example", attached: true, selected: true },
   ],
   scroll: { x: 0, y: 0, maxX: 0, maxY: 0, atTop: true, atBottom: true, atLeft: true, atRight: true },
-  dom: "[1]<a href=https://example.com>Example</a>",
-  refs: [{ ref: 1, tag: "a", role: "link", name: "Example", attrs: {}, bounds: null }],
+  dom: [
+    "[1]<a href=https://example.com>Example</a>",
+    "<frame>",
+    "  [2]<button>Child action</button>",
+    "</frame>",
+    "<#shadow-root>",
+    "  [3]<button>Shadow action</button>",
+    "</#shadow-root>",
+  ].join("\n"),
+  refs: [
+    { ref: 1, tag: "a", role: "link", name: "Example", attrs: {}, bounds: null },
+    {
+      ref: 2,
+      tag: "button",
+      role: "button",
+      name: "Child action",
+      attrs: {},
+      bounds: { x: 120, y: 40, width: 100, height: 32 },
+    },
+    {
+      ref: 3,
+      tag: "button",
+      role: "button",
+      name: "Shadow action",
+      attrs: {},
+      bounds: { x: 12, y: 90, width: 110, height: 32 },
+    },
+  ],
   screenshot: { mimeType: "image/jpeg", data: "base64", width: 800, height: 600 },
   snapshotId: "snap-9" as BrowserState["snapshotId"],
   snapshotVersion: 3,
@@ -69,6 +95,9 @@ describe("browser runtime messages", () => {
       expect(result.state.snapshotVersion).toBe(3);
       expect(result.state.documentEpoch).toBe(2);
       expect(result.state.navigationEpoch).toBe(4);
+      expect(result.state.refs.map((ref) => ref.ref)).toEqual([1, 2, 3]);
+      expect(result.state.dom).toContain("<frame>");
+      expect(result.state.dom).toContain("<#shadow-root>");
       expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     }
   });

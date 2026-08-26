@@ -194,7 +194,7 @@ export class FrameGraphTracker {
 
   childrenOf(frameId: string): FrameRecord[] {
     return [...this.records.values()]
-      .filter((record) => record.parentFrameId === frameId)
+      .filter((record) => record.parentFrameId === frameId && !record.retired)
       .map(snapshot);
   }
 
