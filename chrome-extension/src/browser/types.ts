@@ -91,6 +91,21 @@ export interface TabInfo {
   selected: boolean;
 }
 
+export type SnapshotId = string & { readonly __brand: "SnapshotId" };
+
+export interface SnapshotIdentity {
+  snapshotId: SnapshotId;
+  snapshotVersion: number;
+  documentEpoch: number;
+  navigationEpoch: number;
+}
+
+export interface GroundedTarget {
+  tabId: number;
+  snapshotId: SnapshotId;
+  ref: number;
+}
+
 export type BrowserError =
   | InvalidUrlError
   | UnsupportedPageError
