@@ -4,7 +4,7 @@ import {
   type Browser,
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
-import { MainFrameIdentityTracker } from "./document-identity";
+import { FrameGraphTracker } from "./document-identity";
 import {
   buildHighlightOverlayExpression,
   enrichPageContentWithAccessibility,
@@ -64,7 +64,7 @@ export class BrowserPage {
   private readonly snapshots: SnapshotStore;
   private browser: Browser | null = null;
   private puppeteerPage: Page | null = null;
-  private identityTracker: MainFrameIdentityTracker | null = null;
+  private identityTracker: FrameGraphTracker | null = null;
   private observationQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
 
@@ -105,7 +105,7 @@ export class BrowserPage {
         return { ok: false, error: { code: "attach_failed", message: "Connection exposed no page" } };
       }
       const session = await page.createCDPSession();
-      const identityTracker = await MainFrameIdentityTracker.create(session, () =>
+      const identityTracker = await FrameGraphTracker.create(session, () =>
         this.snapshots.invalidate(this.tabId),
       );
       this.browser = browser;
