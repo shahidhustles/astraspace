@@ -229,6 +229,22 @@ function activeTab(overrides: Partial<chrome.tabs.Tab> = {}): chrome.tabs.Tab[] 
   return [{ id: 7, url: "https://example.com", ...overrides } as chrome.tabs.Tab];
 }
 
+// Full successful open/switch/close results now carry lifecycle measurement,
+// so exact expectations build it in one place.
+function tabResult(
+  tabId: number,
+  completedBy: "controllable_url_and_attach" | "activation_and_attach" | "removal_confirmed",
+): { ok: boolean; tabId: number; measured: unknown } {
+  return {
+    ok: true,
+    tabId,
+    measured: {
+      actionId: expect.any(String),
+      lifecycle: { status: "completed", completedBy, elapsedMs: expect.any(Number) },
+    },
+  };
+}
+
 describe("BrowserContext", () => {
   test("selects an active allowed tab and registers it once", async () => {
     const { context, events } = setup({ tabs: activeTab() });
@@ -448,7 +464,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitUpdated({ id: 42, url: "https://example.com/start" });
 
-    expect(await pending).toEqual({ ok: true, tabId: 42 });
+    expect(await pending).toEqual(tabResult(42, "controllable_url_and_attach"));
     expect(context.selectedTabId).toBe(42);
     expect(context.tabCount).toBe(1);
   });
@@ -461,7 +477,7 @@ describe("BrowserContext", () => {
 
     const result = await context.openTab("https://example.com/ready");
 
-    expect(result).toEqual({ ok: true, tabId: 42 });
+    expect(result).toEqual(tabResult(42, "controllable_url_and_attach"));
     expect(connectTabCalls()).toBe(1);
   });
 
@@ -478,7 +494,7 @@ describe("BrowserContext", () => {
 
     const result = await context.openTab("https://example.com/ready");
 
-    expect(result).toEqual({ ok: true, tabId: 42 });
+    expect(result).toEqual(tabResult(42, "controllable_url_and_attach"));
     expect(api.updatedListenerCount()).toBe(0);
   });
 
@@ -541,7 +557,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitActivated(7);
 
-    expect(await pending).toEqual({ ok: true, tabId: 7 });
+    expect(await pending).toEqual(tabResult(7, "activation_and_attach"));
     expect(connectTabCalls()).toBe(1);
     expect(events).toEqual([{ type: "attach_reused", tabId: 7 }]);
   });
@@ -556,7 +572,7 @@ describe("BrowserContext", () => {
 
     const result = await context.switchTab(7);
 
-    expect(result).toEqual({ ok: true, tabId: 7 });
+    expect(result).toEqual(tabResult(7, "activation_and_attach"));
     expect(api.activatedListenerCount()).toBe(0);
   });
 
@@ -583,7 +599,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitActivated(42);
 
-    expect(await switched).toEqual({ ok: true, tabId: 42 });
+    expect(await switched).toEqual(tabResult(42, "activation_and_attach"));
     expect(context.selectedTabId).toBe(42);
     expect(context.tabCount).toBe(1);
   });
@@ -601,8 +617,8 @@ describe("BrowserContext", () => {
     api.emitUpdated({ id: 10, url: "https://a.example" });
     api.emitUpdated({ id: 11, url: "https://b.example" });
 
-    expect(await first).toEqual({ ok: true, tabId: 10 });
-    expect(await second).toEqual({ ok: true, tabId: 11 });
+    expect(await first).toEqual(tabResult(10, "controllable_url_and_attach"));
+    expect(await second).toEqual(tabResult(11, "controllable_url_and_attach"));
     expect(context.tabCount).toBe(2);
     expect(connectTabCalls()).toBe(2);
     expect(context.selectedTabId).toBe(11);
@@ -627,7 +643,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitActivated(10);
 
-    expect(await pending).toEqual({ ok: true, tabId: 10 });
+    expect(await pending).toEqual(tabResult(10, "activation_and_attach"));
     expect(context.selectedTabId).toBe(10);
     expect(connectTabCalls()).toBe(2);
     expect(context.tabCount).toBe(2);
@@ -659,7 +675,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitActivated(33);
 
-    expect(await pending).toEqual({ ok: true, tabId: 33 });
+    expect(await pending).toEqual(tabResult(33, "activation_and_attach"));
     expect(context.selectedTabId).toBe(33);
     expect(context.tabCount).toBe(1);
   });
@@ -828,7 +844,7 @@ describe("BrowserContext", () => {
 
     const result = await context.closeTab(10);
 
-    expect(result).toEqual({ ok: true, tabId: 10 });
+    expect(result).toEqual(tabResult(10, "removal_confirmed"));
     expect(removeTabCalls()).toEqual([10]);
     expect(browsers[0].disconnectCalls).toBe(1);
     expect(browsers[1].disconnectCalls).toBe(0);
@@ -842,7 +858,7 @@ describe("BrowserContext", () => {
 
     const result = await context.closeTab(7);
 
-    expect(result).toEqual({ ok: true, tabId: 7 });
+    expect(result).toEqual(tabResult(7, "removal_confirmed"));
     expect(context.selectedTabId).toBeNull();
     expect(context.tabCount).toBe(0);
   });
@@ -974,7 +990,7 @@ describe("BrowserContext", () => {
     await Promise.resolve();
     api.emitUpdated({ id: 12, url: "https://a.example" });
 
-    expect(await reopened).toEqual({ ok: true, tabId: 12 });
+    expect(await reopened).toEqual(tabResult(12, "controllable_url_and_attach"));
     expect(connectTabCalls()).toBe(3);
   });
 
@@ -1036,11 +1052,11 @@ describe("BrowserContext", () => {
     const first = context.switchTab(42);
     await Promise.resolve();
     api.emitActivated(42);
-    expect(await first).toEqual({ ok: true, tabId: 42 });
+    expect(await first).toEqual(tabResult(42, "activation_and_attach"));
     const second = context.switchTab(7);
     await Promise.resolve();
     api.emitActivated(7);
-    expect(await second).toEqual({ ok: true, tabId: 7 });
+    expect(await second).toEqual(tabResult(7, "activation_and_attach"));
 
     expect(snapshotStore.invalidatedTabs).toEqual([]);
     expect(context.selectedTabId).toBe(7);

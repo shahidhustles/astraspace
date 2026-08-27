@@ -5,6 +5,7 @@ import type {
   LayoutSignal,
   NavigationCommitRecord,
   ScrollMeasurement,
+  TabLifecycleMeasurement,
 } from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
@@ -127,11 +128,11 @@ export type BrowserActionData =
   | { kind: "keypress" }
   | { kind: "scroll"; x: number; y: number; measured?: ScrollMeasurement }
   | { kind: "scroll_to_text"; x: number; y: number; measured?: ScrollMeasurement }
-  | { kind: "get_select_options"; options: SelectOption[]; optionsTruncated: boolean }
+  | { kind: "get_select_options"; options: SelectOption[]; optionsTruncated: boolean; measured?: TabLifecycleMeasurement }
   | { kind: "select_option"; selectedIndex: number }
-  | { kind: "open_tab"; tabs: TabInfo[] | null }
-  | { kind: "switch_tab"; tabs: TabInfo[] | null }
-  | { kind: "close_tab"; tabs: TabInfo[] | null };
+  | { kind: "open_tab"; tabs: TabInfo[] | null; measured?: TabLifecycleMeasurement }
+  | { kind: "switch_tab"; tabs: TabInfo[] | null; measured?: TabLifecycleMeasurement }
+  | { kind: "close_tab"; tabs: TabInfo[] | null; measured?: TabLifecycleMeasurement };
 
 export interface InvalidActionError {
   code: "invalid_action";

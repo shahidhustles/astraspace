@@ -1,7 +1,7 @@
-import type { CloseResult, TabListResult } from "../context";
-import type { AttachResult, NavResult } from "../page";
+import type { TabLifecycleResult, TabListResult } from "../context";
+import type { NavResult } from "../page";
 import type { GroundedTarget, TabInfo } from "../types";
-import type { ActionSettleContext } from "../waits/types";
+import type { ActionSettleContext, TabLifecycleMeasurement } from "../waits/types";
 import type {
   BrowserActionResult,
   BrowserActionRequest,
@@ -35,9 +35,9 @@ export interface BrowserActionRuntime {
     option: SelectOptionIdentity,
     settle?: ActionSettleContext,
   ) => Promise<SelectOptionResult>;
-  openTab: (url: string) => Promise<AttachResult>;
-  switchTab: (tabId: number) => Promise<AttachResult>;
-  closeTab: (tabId: number) => Promise<CloseResult>;
+  openTab: (url: string, settle?: ActionSettleContext) => Promise<TabLifecycleResult>;
+  switchTab: (tabId: number, settle?: ActionSettleContext) => Promise<TabLifecycleResult>;
+  closeTab: (tabId: number, settle?: ActionSettleContext) => Promise<TabLifecycleResult>;
   listTabs: () => Promise<TabListResult>;
 }
 
@@ -97,20 +97,30 @@ export async function dispatchBrowserAction(
       case "browser_scroll_to_text":
         return await scrollToTextAction(request.input, runtime, settle);
       case "browser_get_select_options":
-        return await selectOptionsAction(request.input, runtime);
+        return await selectOptionsAction(request.input, runtime, settle);
       case "browser_select_option":
         return await selectOptionAction(request.input, runtime, settle);
       case "browser_open_tab":
         return await tabLifecycleAction(
           "browser_open_tab",
-          () => runtime.openTab(request.input.url),
+          () => runtime.openTab(request.input.url, settle),
           request.input.url,
           runtime,
         );
       case "browser_switch_tab":
-        return await tabLifecycleAction("browser_switch_tab", () => runtime.switchTab(request.input.tabId), "", runtime);
+        return await tabLifecycleAction(
+          "browser_switch_tab",
+          () => runtime.switchTab(request.input.tabId, settle),
+          "",
+          runtime,
+        );
       case "browser_close_tab":
-        return await tabLifecycleAction("browser_close_tab", () => runtime.closeTab(request.input.tabId), "", runtime);
+        return await tabLifecycleAction(
+          "browser_close_tab",
+          () => runtime.closeTab(request.input.tabId, settle),
+          "",
+          runtime,
+        );
     }
   } catch {
     return { ok: false, action, tabId: runtime.selectedTabId, error: { code: "action_failed", message: "Browser action failed" } };
@@ -286,11 +296,21 @@ function scrollEnvelope(
 async function selectOptionsAction(
   target: GroundedTarget,
   runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
 ): Promise<BrowserActionResult> {
+  const startedAt = Date.now();
   const result = await runtime.getSelectOptions(target);
   if (!result.ok) {
     return { ok: false, action: "browser_get_select_options", tabId: target.tabId, error: result.error };
   }
+  // Read-only inspection finishes the moment the read lands; recording that
+  // keeps every completion carrying evidence without invalidating anything.
+  const measured: TabLifecycleMeasurement | undefined = settle?.actionId
+    ? {
+        actionId: settle.actionId,
+        lifecycle: { status: "completed", completedBy: "read_only_inspection", elapsedMs: Date.now() - startedAt },
+      }
+    : undefined;
   return {
     ok: true,
     action: "browser_get_select_options",
@@ -301,6 +321,7 @@ async function selectOptionsAction(
       kind: "get_select_options",
       options: result.options,
       optionsTruncated: result.optionsTruncated,
+      ...(measured ? { measured } : {}),
     },
   };
 }
@@ -326,9 +347,14 @@ async function selectOptionAction(
   };
 }
 
+// Shared mapping for the three tab lifecycle actions. The envelope's tab
+// identity follows the prior contract (close reports the surviving selected
+// tab), snapshot truth is aligned with what the context actually invalidates,
+// and the context-supplied measurement carries action id, elapsed time, and
+// the Chrome signal that completed it.
 async function tabLifecycleAction(
   action: "browser_open_tab" | "browser_switch_tab" | "browser_close_tab",
-  run: () => Promise<AttachResult | CloseResult>,
+  run: () => Promise<TabLifecycleResult>,
   urlFallback: string,
   runtime: BrowserActionRuntime,
 ): Promise<BrowserActionResult> {
@@ -346,8 +372,8 @@ async function tabLifecycleAction(
     action,
     tabId,
     url,
-    snapshotInvalidated: true,
-    data: tabActionData(action, tabs),
+    snapshotInvalidated: action === "browser_close_tab",
+    data: tabActionData(action, tabs, result.measured),
   };
 }
 
@@ -359,14 +385,15 @@ async function listedTabs(runtime: BrowserActionRuntime): Promise<TabInfo[] | nu
 function tabActionData(
   action: "browser_open_tab" | "browser_switch_tab" | "browser_close_tab",
   tabs: TabInfo[] | null,
+  measured?: TabLifecycleMeasurement,
 ): BrowserActionData {
   switch (action) {
     case "browser_open_tab":
-      return { kind: "open_tab", tabs };
+      return { kind: "open_tab", tabs, ...(measured ? { measured } : {}) };
     case "browser_switch_tab":
-      return { kind: "switch_tab", tabs };
+      return { kind: "switch_tab", tabs, ...(measured ? { measured } : {}) };
     case "browser_close_tab":
-      return { kind: "close_tab", tabs };
+      return { kind: "close_tab", tabs, ...(measured ? { measured } : {}) };
   }
 }
 

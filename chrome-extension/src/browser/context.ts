@@ -5,9 +5,17 @@ import {
   type BrowserActionCancelReply,
   type BrowserActionRequest,
   type ScheduledAction,
+  type ActionCancelledError,
+  type ActionWaitTimeoutError,
 } from "./actions/types";
 import { TabActionCoordinator } from "./waits/coordinator";
-import type { ActionId, ActionSettleContext } from "./waits/types";
+import {
+  createActionId,
+  type ActionId,
+  type ActionSettleContext,
+  type TabCompletionSource,
+  type TabLifecycleMeasurement,
+} from "./waits/types";
 import type {
   ClearInputResult,
   ClickResult,
@@ -24,7 +32,19 @@ import type { BrowserError, DiagnosticEvent, GroundedTarget, ObservationResult, 
 
 export type TabListResult = { ok: true; tabs: TabInfo[] } | { ok: false; error: BrowserError };
 
-export type CloseResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
+// Success evidence for open, switch, and close actions: the acting tab plus
+// how Chrome completed the lifecycle. Close may also end bounded without a
+// completed removal, which surfaces as the action-level timeout or cancel.
+export type TabLifecycleResult =
+  | { ok: true; tabId: number; measured: TabLifecycleMeasurement }
+  | { ok: false; error: BrowserError | ActionCancelledError | ActionWaitTimeoutError };
+
+type RemovalCheck =
+  | { kind: "removed" }
+  | { kind: "missing_tab" }
+  | { kind: "chrome_error" }
+  | { kind: "timeout" }
+  | { kind: "cancelled" };
 
 export type CleanupResult = { failures: BrowserError[] };
 
@@ -155,7 +175,8 @@ export class BrowserContext {
     return { ok: true, tabs: listed };
   }
 
-  async openTab(url: string): Promise<AttachResult> {
+  async openTab(url: string, settle?: ActionSettleContext): Promise<TabLifecycleResult> {
+    const startedAt = Date.now();
     const policy = enforceUrlPolicy(url);
     if (!policy.ok) {
       return { ok: false, error: policy.error };
@@ -190,12 +211,18 @@ export class BrowserContext {
       handle.cancel();
       return { ok: false, error: { code: "chrome_api_error", message: "Created tab has no id or URL" } };
     }
-    createdTabId = created.id;
+    const openedId = created.id;
+    createdTabId = openedId;
 
     const createdPolicy = enforceUrlPolicy(created.url);
     if (createdPolicy.ok) {
       handle.cancel();
-      return this.attachTab(created.id, createdPolicy.url);
+      return this.completeLifecycle(
+        startedAt,
+        "controllable_url_and_attach",
+        settle,
+        () => this.attachTab(openedId, createdPolicy.url),
+      );
     }
 
     let reached: chrome.tabs.Tab;
@@ -214,10 +241,14 @@ export class BrowserContext {
     if (reached.url === undefined) {
       return { ok: false, error: { code: "chrome_api_error", message: "Created tab has no URL" } };
     }
-    return this.attachTab(created.id, reached.url);
+    const reachedUrl = reached.url;
+    return this.completeLifecycle(startedAt, "controllable_url_and_attach", settle, () =>
+      this.attachTab(openedId, reachedUrl),
+    );
   }
 
-  async switchTab(tabId: number): Promise<AttachResult> {
+  async switchTab(tabId: number, settle?: ActionSettleContext): Promise<TabLifecycleResult> {
+    const startedAt = Date.now();
     const handle = this.waitFor<chrome.tabs.OnActivatedInfo>(
       (cb) => this.deps.onActivated((info) => cb(info)),
       (info) => info.tabId === tabId,
@@ -251,19 +282,22 @@ export class BrowserContext {
       if (existing.attached) {
         this.selectedTab = tabId;
         this.deps.diagnostics({ type: "attach_reused", tabId });
-        return { ok: true, tabId };
+        return { ok: true, tabId, measured: this.lifecycleEvidence("activation_and_attach", startedAt, settle) };
       }
-      return this.runAttach(existing);
+      return this.completeLifecycle(startedAt, "activation_and_attach", settle, () => this.runAttach(existing));
     }
 
     if (tab.url === undefined) {
       return { ok: false, error: { code: "inaccessible_tab", message: "Tab URL is not exposed" } };
     }
-    const policy = enforceUrlPolicy(tab.url);
+    const reachedUrl = tab.url;
+    const policy = enforceUrlPolicy(reachedUrl);
     if (!policy.ok) {
       return { ok: false, error: policy.error };
     }
-    return this.attachTab(tabId, tab.url);
+    return this.completeLifecycle(startedAt, "activation_and_attach", settle, () =>
+      this.attachTab(tabId, reachedUrl),
+    );
   }
 
   async navigate(url: string): Promise<NavResult> {
@@ -423,27 +457,124 @@ export class BrowserContext {
     return page.selectOption(target, option, settle);
   }
 
-  async closeTab(tabId: number): Promise<CloseResult> {
-    const page = this.pages.get(tabId);
-    if (!page) {
+  async closeTab(tabId: number, settle?: ActionSettleContext): Promise<TabLifecycleResult> {
+    const startedAt = Date.now();
+    if (!this.pages.has(tabId)) {
       return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
     }
 
-    try {
-      await this.deps.removeTab(tabId);
-    } catch (error) {
-      if (error instanceof Error && /no tab with id/i.test(error.message)) {
+    const check = await this.confirmRemoval(tabId, settle);
+    switch (check.kind) {
+      case "missing_tab":
         return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
-      }
-      return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
+      case "chrome_error":
+        return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
+      case "timeout":
+        return {
+          ok: false,
+          error: { code: "action_wait_timeout", message: "Close did not finish before the deadline" },
+        };
+      case "cancelled":
+        return {
+          ok: false,
+          error: { code: "action_cancelled", message: "Browser action was cancelled during dispatch", dispatchStarted: true },
+        };
+      case "removed":
+        break;
     }
 
-    const disconnected = await page.disconnect();
+    // Chrome confirmed the removal, so local connection state may be
+    // discarded. Clearing the registry first keeps any late removal event a
+    // no-op instead of a second teardown.
+    const managed = this.pages.get(tabId);
     this.removeTabRecord(tabId);
-    if (!disconnected.ok) {
-      return { ok: false, error: disconnected.error };
+    if (managed) {
+      const disconnected = await managed.disconnect();
+      if (!disconnected.ok) {
+        return { ok: false, error: disconnected.error };
+      }
     }
-    return { ok: true, tabId };
+    return { ok: true, tabId, measured: this.lifecycleEvidence("removal_confirmed", startedAt, settle) };
+  }
+
+  private lifecycleEvidence(
+    completedBy: TabCompletionSource,
+    startedAt: number,
+    settle?: ActionSettleContext,
+  ): TabLifecycleMeasurement {
+    return {
+      actionId: settle?.actionId ?? createActionId(),
+      lifecycle: { status: "completed", completedBy, elapsedMs: Date.now() - startedAt },
+    };
+  }
+
+  private async completeLifecycle(
+    startedAt: number,
+    completedBy: TabCompletionSource,
+    settle: ActionSettleContext | undefined,
+    attach: () => Promise<AttachResult>,
+  ): Promise<TabLifecycleResult> {
+    const result = await attach();
+    if (!result.ok) {
+      return result;
+    }
+    return { ok: true, tabId: result.tabId, measured: this.lifecycleEvidence(completedBy, startedAt, settle) };
+  }
+
+  // Arms tabs.onRemoved before asking Chrome to remove the tab. Confirmation
+  // is whichever Chrome signal lands first: the removal event for this tab or
+  // the remove call resolving without error. Aborts and the remaining budget
+  // cap the wait; every path tears down its listener and timer.
+  private confirmRemoval(tabId: number, settle?: ActionSettleContext): Promise<RemovalCheck> {
+    const capMs = settle?.timeoutMs ?? this.deps.timeoutMs;
+
+    return new Promise<RemovalCheck>((resolve) => {
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      let detachAbort: (() => void) | null = null;
+
+      const finish = (check: RemovalCheck): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        detachAbort?.();
+        stopRemoved();
+        resolve(check);
+      };
+
+      const stopRemoved = this.deps.onRemoved((removedId) => {
+        if (removedId === tabId) {
+          finish({ kind: "removed" });
+        }
+      });
+
+      const signal = settle?.signal;
+      if (signal?.aborted) {
+        finish({ kind: "cancelled" });
+        return;
+      }
+      if (signal) {
+        const onAbort = (): void => finish({ kind: "cancelled" });
+        signal.addEventListener("abort", onAbort, { once: true });
+        detachAbort = () => signal.removeEventListener("abort", onAbort);
+      }
+
+      timer = setTimeout(() => finish({ kind: "timeout" }), capMs);
+
+      void this.deps.removeTab(tabId).then(
+        () => finish({ kind: "removed" }),
+        (error: unknown) =>
+          finish(
+            error instanceof Error && /no tab with id/i.test(error.message)
+              ? { kind: "missing_tab" }
+              : { kind: "chrome_error" },
+          ),
+      );
+    });
   }
 
   async cleanup(): Promise<CleanupResult> {

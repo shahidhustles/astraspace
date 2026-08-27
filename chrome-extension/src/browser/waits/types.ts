@@ -62,14 +62,17 @@ export interface ActionSettleSignals {
 export interface ActionDispatchBudget {
   timeoutMs: number | null;
   expectation: ActionExpectationPolicy | null;
+  actionId: ActionId;
 }
 
-// Abort handle, remaining budget, and parsed wait expectation threaded from the
-// coordinator through dispatch into settling helpers.
+// Abort handle, remaining budget, parsed wait expectation, and the effective
+// action id threaded from the coordinator through dispatch into settling
+// helpers.
 export interface ActionSettleContext {
   signal: AbortSignal;
   timeoutMs: number | null;
   expectation: ActionExpectationPolicy | null;
+  actionId: ActionId;
 }
 
 export function createActionId(): ActionId {
@@ -153,4 +156,24 @@ export interface ScrollMeasurement {
 // is a number|null, so JSON round-trips stay safe.
 export interface PopupEvidence {
   newTabId: number | null;
+}
+
+// Which Chrome signal or inspection rule completed a tab action. Opening
+// needs a controllable URL plus attachment, switching needs activation plus
+// attachment, closing needs removal confirmed by Chrome, and select
+// inspection completes the moment it reads.
+export type TabCompletionSource =
+  | "controllable_url_and_attach"
+  | "activation_and_attach"
+  | "removal_confirmed"
+  | "read_only_inspection";
+
+export type TabLifecycleOutcome =
+  | { status: "completed"; completedBy: TabCompletionSource; elapsedMs: number }
+  | { status: "timeout"; elapsedMs: number }
+  | { status: "cancelled"; elapsedMs: number };
+
+export interface TabLifecycleMeasurement {
+  actionId: ActionId;
+  lifecycle: TabLifecycleOutcome;
 }

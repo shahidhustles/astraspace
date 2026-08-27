@@ -8,6 +8,20 @@ const TABS: TabInfo[] = [
   { tabId: 9, url: "https://opened.example", title: "Opened", attached: true, selected: true },
 ];
 
+function completed(
+  actionId: string,
+  completedBy: "controllable_url_and_attach" | "activation_and_attach" | "removal_confirmed",
+) {
+  return {
+    actionId,
+    lifecycle: { status: "completed" as const, completedBy, elapsedMs: 12 },
+  };
+}
+
+const OPEN_MEASURED = completed("open-id", "controllable_url_and_attach");
+const SWITCH_MEASURED = completed("switch-id", "activation_and_attach");
+const CLOSE_MEASURED = completed("close-id", "removal_confirmed");
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 9,
@@ -17,9 +31,9 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     goBack: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
     refresh: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
     click: async () => ({ ok: false, error: { code: "stale_ref", message: "not used", target: { tabId: 7, snapshotId: "s" as const, ref: 1 } } }),
-    openTab: async () => ({ ok: true, tabId: 9 }),
-    switchTab: async () => ({ ok: true, tabId: 9 }),
-    closeTab: async () => ({ ok: true, tabId: 9 }),
+    openTab: async () => ({ ok: true, tabId: 9, measured: OPEN_MEASURED }),
+    switchTab: async () => ({ ok: true, tabId: 9, measured: SWITCH_MEASURED }),
+    closeTab: async () => ({ ok: true, tabId: 9, measured: CLOSE_MEASURED }),
     listTabs: async () => ({ ok: true, tabs: TABS }),
     ...overrides,
   });
@@ -31,7 +45,7 @@ describe("browser_open_tab", () => {
     const runtime = fakeRuntime({
       openTab: async (url) => {
         openedUrl = url;
-        return { ok: true, tabId: 9 };
+        return { ok: true, tabId: 9, measured: OPEN_MEASURED };
       },
     });
 
@@ -46,8 +60,8 @@ describe("browser_open_tab", () => {
       action: "browser_open_tab",
       tabId: 9,
       url: "https://opened.example",
-      snapshotInvalidated: true,
-      data: { kind: "open_tab", tabs: TABS },
+      snapshotInvalidated: false,
+      data: { kind: "open_tab", tabs: TABS, measured: OPEN_MEASURED },
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -64,7 +78,7 @@ describe("browser_open_tab", () => {
 
     expect(result).toMatchObject({ ok: true, url: "https://opened.example" });
     if (result?.ok) {
-      expect(result.data).toEqual({ kind: "open_tab", tabs: [TABS[0]] });
+      expect(result.data).toEqual({ kind: "open_tab", tabs: [TABS[0]], measured: OPEN_MEASURED });
     }
   });
 
@@ -83,8 +97,8 @@ describe("browser_open_tab", () => {
       action: "browser_open_tab",
       tabId: 9,
       url: "https://opened.example",
-      snapshotInvalidated: true,
-      data: { kind: "open_tab", tabs: null },
+      snapshotInvalidated: false,
+      data: { kind: "open_tab", tabs: null, measured: OPEN_MEASURED },
     });
   });
 
@@ -130,7 +144,7 @@ describe("browser_switch_tab", () => {
     const runtime = fakeRuntime({
       switchTab: async (tabId) => {
         switchedId = tabId;
-        return { ok: true, tabId };
+        return { ok: true, tabId, measured: SWITCH_MEASURED };
       },
     });
 
@@ -145,8 +159,8 @@ describe("browser_switch_tab", () => {
       action: "browser_switch_tab",
       tabId: 9,
       url: "https://opened.example",
-      snapshotInvalidated: true,
-      data: { kind: "switch_tab", tabs: TABS },
+      snapshotInvalidated: false,
+      data: { kind: "switch_tab", tabs: TABS, measured: SWITCH_MEASURED },
     });
   });
 
@@ -198,7 +212,7 @@ describe("browser_close_tab", () => {
     const runtime = fakeRuntime({
       closeTab: async (tabId) => {
         closedId = tabId;
-        return { ok: true, tabId };
+        return { ok: true, tabId, measured: CLOSE_MEASURED };
       },
       listTabs: async () => ({ ok: true, tabs: TABS.filter((tab) => tab.tabId !== 1) }),
     });
@@ -215,7 +229,7 @@ describe("browser_close_tab", () => {
       tabId: 9,
       url: "https://opened.example",
       snapshotInvalidated: true,
-      data: { kind: "close_tab", tabs: [TABS[1]] },
+      data: { kind: "close_tab", tabs: [TABS[1]], measured: CLOSE_MEASURED },
     });
   });
 

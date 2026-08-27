@@ -71,7 +71,15 @@ describe("browser_get_select_options dispatch", () => {
       tabId: 7,
       url: "https://example.com/final",
       snapshotInvalidated: false,
-      data: { kind: "get_select_options", options: OPTIONS, optionsTruncated: true },
+      data: {
+        kind: "get_select_options",
+        options: OPTIONS,
+        optionsTruncated: true,
+        measured: {
+          actionId: expect.any(String),
+          lifecycle: { status: "completed", completedBy: "read_only_inspection", elapsedMs: expect.any(Number) },
+        },
+      },
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });

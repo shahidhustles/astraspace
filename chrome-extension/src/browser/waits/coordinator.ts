@@ -226,7 +226,11 @@ export class TabActionCoordinator {
     const remaining =
       entry.deadlineMs === null ? null : Math.max(0, entry.deadlineMs - (Date.now() - entry.acceptedAt));
     try {
-      return entry.work(entry.controller.signal, { timeoutMs: remaining, expectation: entry.expectation });
+      return entry.work(entry.controller.signal, {
+        timeoutMs: remaining,
+        expectation: entry.expectation,
+        actionId: entry.id,
+      });
     } catch (error) {
       return Promise.reject(error);
     }
@@ -293,6 +297,7 @@ export function enqueueActionRequest(
         signal,
         timeoutMs: budget.timeoutMs,
         expectation: budget.expectation,
+        actionId: budget.actionId,
       }),
   });
 }
