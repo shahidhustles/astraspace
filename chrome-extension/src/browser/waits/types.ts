@@ -63,6 +63,7 @@ export interface ActionDispatchBudget {
   timeoutMs: number | null;
   expectation: ActionExpectationPolicy | null;
   actionId: ActionId;
+  startedAtMs: number;
 }
 
 // Abort handle, remaining budget, parsed wait expectation, and the effective
@@ -73,6 +74,50 @@ export interface ActionSettleContext {
   timeoutMs: number | null;
   expectation: ActionExpectationPolicy | null;
   actionId: ActionId;
+  startedAtMs: number;
+}
+
+// How an action ended overall. `completed` proves the policy; `timed_out`
+// means the action ran but settling stayed unproven at the deadline;
+// `cancelled` means the caller aborted it; `failed` covers lifecycle aborts
+// and thrown work.
+export type ActionCompletionStatus = "completed" | "timed_out" | "cancelled" | "failed";
+
+export interface ActionCompletionEvidence {
+  actionId: ActionId | null;
+  status: ActionCompletionStatus;
+  elapsedMs: number;
+}
+
+// Why the coordinator or connection layer settled an action on its own.
+// Caller cancellation goes through `cancel()` instead.
+export type ActionAbortCause =
+  | "tab_removed"
+  | "debugger_detached"
+  | "connection_replaced"
+  | "runtime_cleanup";
+
+// Evidence crossing the runtime boundary is bounded so one pathological page
+// cannot balloon a result payload.
+export const MAX_EVIDENCE_TEXT_CHARS = 2048;
+
+export const MAX_COMMIT_RECORDS = 20;
+
+// Truncates page-derived text before it crosses into result envelopes.
+export function boundText(value: string): string {
+  return value.length <= MAX_EVIDENCE_TEXT_CHARS
+    ? value
+    : `${value.slice(0, MAX_EVIDENCE_TEXT_CHARS)}…[truncated]`;
+}
+
+// Keeps the first commits (the root hops identity relies on) under the cap
+// and bounds their page-derived URLs.
+export function boundedCommits(commits: NavigationCommitRecord[]): NavigationCommitRecord[] {
+  return commits.slice(0, MAX_COMMIT_RECORDS).map((commit) => ({
+    ...commit,
+    oldUrl: boundText(commit.oldUrl),
+    newUrl: boundText(commit.newUrl),
+  }));
 }
 
 export function createActionId(): ActionId {

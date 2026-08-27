@@ -502,7 +502,9 @@ describe("close tab lifecycle", () => {
       input: { tabId: victimId },
     });
 
-    expect(result).toMatchObject({ ok: false, error: { code: "action_wait_timeout" } });
+    // removeTab went out, so this is dispatch uncertainty rather than a
+    // queue expiry; action_wait_timeout stays reserved for the latter.
+    expect(result).toMatchObject({ ok: false, error: { code: "lifecycle_timeout" } });
     expect(h.context.tabCount).toBe(2);
     expect(h.context.selectedTabId).toBe(victimId);
     expect(h.totalDisconnects()).toBe(0);

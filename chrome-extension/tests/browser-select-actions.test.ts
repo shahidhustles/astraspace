@@ -25,6 +25,13 @@ const OPTIONS = [
   { index: 1, label: "Beta", value: "beta", disabled: false, selected: false },
 ];
 
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 7,
@@ -71,6 +78,7 @@ describe("browser_get_select_options dispatch", () => {
       tabId: 7,
       url: "https://example.com/final",
       snapshotInvalidated: false,
+      completion: completes("completed"),
       data: {
         kind: "get_select_options",
         options: OPTIONS,
@@ -102,6 +110,7 @@ describe("browser_get_select_options dispatch", () => {
         action: "browser_get_select_options",
         tabId: 7,
         error,
+        completion: completes("failed"),
       });
     }
   });
@@ -158,6 +167,7 @@ describe("browser_select_option dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "select_option", selectedIndex: 1 },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -187,6 +197,7 @@ describe("browser_select_option dispatch", () => {
         action: "browser_select_option",
         tabId: 7,
         error,
+        completion: completes("failed"),
       });
     }
   });

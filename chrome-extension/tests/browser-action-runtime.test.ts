@@ -22,6 +22,13 @@ function clickOnTab(tabId: number) {
   return actionMessage("browser_click", clickTarget(tabId));
 }
 
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 7,
@@ -61,6 +68,7 @@ describe("browser action runtime messages", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "navigate" },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -84,6 +92,7 @@ describe("browser action runtime messages", () => {
       url: "https://example.com/previous",
       snapshotInvalidated: true,
       data: { kind: "back" },
+      completion: completes("completed"),
     });
   });
 
@@ -106,6 +115,7 @@ describe("browser action runtime messages", () => {
       url: "https://example.com",
       snapshotInvalidated: true,
       data: { kind: "refresh" },
+      completion: completes("completed"),
     });
   });
 
@@ -135,6 +145,7 @@ describe("browser action runtime messages", () => {
         message: "Blocked URL scheme: chrome-extension:",
         url: "chrome-extension://x",
       },
+      completion: completes("failed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -157,6 +168,7 @@ describe("browser action runtime messages", () => {
       action: "browser_navigate",
       tabId: 7,
       error: { code: "navigation_timeout", message: "Navigation timed out" },
+      completion: completes("failed"),
     });
   });
 
@@ -198,6 +210,7 @@ describe("browser action runtime messages", () => {
       action: "browser_refresh",
       tabId: 7,
       error: { code: "action_failed", message: "Browser action failed" },
+      completion: completes("failed"),
     });
   });
 
@@ -406,6 +419,7 @@ describe("per-tab action scheduling through the runtime", () => {
         message: "Browser action was cancelled before dispatch",
         dispatchStarted: false,
       },
+      completion: completes("cancelled"),
     });
     expect(clickCalls.length).toBe(1);
 

@@ -13,6 +13,13 @@ const TARGET: GroundedTarget = {
   ref: 2,
 };
 
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 7,
@@ -53,6 +60,7 @@ describe("browser_click dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "click", newTabId: null },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -74,6 +82,7 @@ describe("browser_click dispatch", () => {
       url: "https://example.com",
       snapshotInvalidated: true,
       data: { kind: "click", newTabId: 42 },
+      completion: completes("completed"),
     });
   });
 
@@ -91,6 +100,7 @@ describe("browser_click dispatch", () => {
         action: "browser_click",
         tabId: 7,
         error: { code, message: `reason for ${code}`, target: TARGET },
+        completion: completes("failed"),
       });
     }
   });
@@ -129,6 +139,7 @@ describe("browser_click dispatch", () => {
         action: "browser_click",
         tabId: 7,
         error,
+        completion: completes("failed"),
       });
     }
   });
@@ -150,6 +161,7 @@ describe("browser_click dispatch", () => {
       action: "browser_click",
       tabId: 7,
       error: { code: "action_failed", message: "Browser action failed" },
+      completion: completes("failed"),
     });
   });
 

@@ -14,7 +14,7 @@ import {
   waitForScrollSettled,
   type ScrollSample,
 } from "../src/browser/waits/scroll";
-import { resolveSettleTimings, type ActionSettleSignals } from "../src/browser/waits/types";
+import { resolveSettleTimings, toActionId, type ActionSettleSignals } from "../src/browser/waits/types";
 import { attachTabActionCoordinator, handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
 import type { GroundedTarget, TargetResolutionResult } from "../src/browser/types";
 
@@ -23,6 +23,13 @@ const TARGET: GroundedTarget = {
   snapshotId: "snap-1" as GroundedTarget["snapshotId"],
   ref: 2,
 };
+
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
 
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
@@ -69,6 +76,7 @@ describe("browser_scroll dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "scroll", x: 0, y: 600 },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -99,6 +107,7 @@ describe("browser_scroll dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "scroll", x: 0, y: 80 },
+      completion: completes("completed"),
     });
   });
 
@@ -121,6 +130,7 @@ describe("browser_scroll dispatch", () => {
       action: "browser_scroll",
       tabId: 7,
       error: { code: "stale_ref", message: "stale", target: TARGET },
+      completion: completes("failed"),
     });
   });
 
@@ -157,6 +167,7 @@ describe("browser_scroll dispatch", () => {
       action: "browser_scroll",
       tabId: 7,
       error: { code: "action_failed", message: "Browser action failed" },
+      completion: completes("failed"),
     });
   });
 
@@ -213,6 +224,7 @@ describe("browser_scroll_to_text dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "scroll_to_text", x: 0, y: 900 },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -253,6 +265,7 @@ describe("browser_scroll_to_text dispatch", () => {
       action: "browser_scroll_to_text",
       tabId: 7,
       error: { code: "text_not_found", message: "missing" },
+      completion: completes("failed"),
     });
   });
 
@@ -1023,13 +1036,14 @@ describe("dispatcher evidence mapping for scroll results", () => {
     const outcome = await dispatchBrowserAction(
       { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll", input: { mode: { mode: "top" } } },
       runtime,
-      { signal: new AbortController().signal, timeoutMs: 500, expectation: null },
+      { signal: new AbortController().signal, timeoutMs: 500, expectation: null, actionId: toActionId("probe-1"), startedAtMs: Date.now() },
     );
     expect(outcome).toEqual({
       ok: false,
       action: "browser_scroll",
       tabId: 7,
       error: { code: "action_failed", message: "Browser action failed" },
+      completion: completes("failed"),
     });
   });
 });

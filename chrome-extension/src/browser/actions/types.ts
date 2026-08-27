@@ -7,6 +7,7 @@ import type {
   ScrollMeasurement,
   TabLifecycleMeasurement,
 } from "../waits/types";
+import type { ActionCompletionEvidence } from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
 export const BROWSER_ACTION_MESSAGE = "browser.action";
@@ -228,6 +229,8 @@ export type BrowserActionError =
   | AmbiguousOptionError
   | GroundedTargetError;
 
+// Success carries how the completion policy ended; failures carry what
+// aborted or failed them. Both are bounded and JSON-safe.
 export type BrowserActionResult =
   | {
       ok: true;
@@ -237,12 +240,14 @@ export type BrowserActionResult =
       snapshotInvalidated: boolean;
       data: BrowserActionData;
       signals?: ActionSettleSignals;
+      completion?: ActionCompletionEvidence;
     }
   | {
       ok: false;
       action: BrowserActionName | null;
       tabId: number | null;
       error: BrowserActionError;
+      completion?: ActionCompletionEvidence;
     };
 
 // What a click measured between activation and settlement. `outcome` names the

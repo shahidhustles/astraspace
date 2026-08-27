@@ -1,7 +1,18 @@
 import type { TabLifecycleResult, TabListResult } from "../context";
 import type { NavResult } from "../page";
 import type { GroundedTarget, TabInfo } from "../types";
-import type { ActionSettleContext, TabLifecycleMeasurement } from "../waits/types";
+import {
+  boundText,
+  type ActionCompletionEvidence,
+  type ActionCompletionStatus,
+  type ActionSettleContext,
+  type TabLifecycleMeasurement,
+} from "../waits/types";
+import {
+  clickCompletionStatus,
+  scrollCompletionStatus,
+  signalsCompletionStatus,
+} from "../waits/status";
 import type {
   BrowserActionResult,
   BrowserActionRequest,
@@ -20,9 +31,9 @@ import type {
 
 export interface BrowserActionRuntime {
   selectedTabId: number | null;
-  navigate: (url: string) => Promise<NavResult>;
-  goBack: () => Promise<NavResult>;
-  refresh: () => Promise<NavResult>;
+  navigate: (url: string, settle?: ActionSettleContext) => Promise<NavResult>;
+  goBack: (settle?: ActionSettleContext) => Promise<NavResult>;
+  refresh: (settle?: ActionSettleContext) => Promise<NavResult>;
   click: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClickResult>;
   type: (target: GroundedTarget, text: string, settle?: ActionSettleContext) => Promise<TypeResult>;
   clearInput: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClearInputResult>;
@@ -68,62 +79,125 @@ export async function dispatchBrowserAction(
   settle?: ActionSettleContext,
 ): Promise<BrowserActionResult> {
   const action = request.action;
+  let result: BrowserActionResult;
   try {
-    switch (action) {
-      case "browser_navigate":
-        return await navigationAction("browser_navigate", () => runtime.navigate(request.input.url), runtime);
-      case "browser_back":
-        return await navigationAction("browser_back", () => runtime.goBack(), runtime);
-      case "browser_refresh":
-        return await navigationAction("browser_refresh", () => runtime.refresh(), runtime);
-      case "browser_click":
-        return await clickAction(request.input, runtime, settle);
-      case "browser_type":
-        return await mutatingTargetAction(
-          "browser_type",
-          request.input.target,
-          () => runtime.type(request.input.target, request.input.text, settle),
-        );
-      case "browser_clear_input":
-        return await mutatingTargetAction(
-          "browser_clear_input",
-          request.input,
-          () => runtime.clearInput(request.input, settle),
-        );
-      case "browser_keypress":
-        return await keypressAction(request.input, runtime, settle);
-      case "browser_scroll":
-        return await scrollAction(request.input, runtime, settle);
-      case "browser_scroll_to_text":
-        return await scrollToTextAction(request.input, runtime, settle);
-      case "browser_get_select_options":
-        return await selectOptionsAction(request.input, runtime, settle);
-      case "browser_select_option":
-        return await selectOptionAction(request.input, runtime, settle);
-      case "browser_open_tab":
-        return await tabLifecycleAction(
-          "browser_open_tab",
-          () => runtime.openTab(request.input.url, settle),
-          request.input.url,
-          runtime,
-        );
-      case "browser_switch_tab":
-        return await tabLifecycleAction(
-          "browser_switch_tab",
-          () => runtime.switchTab(request.input.tabId, settle),
-          "",
-          runtime,
-        );
-      case "browser_close_tab":
-        return await tabLifecycleAction(
-          "browser_close_tab",
-          () => runtime.closeTab(request.input.tabId, settle),
-          "",
-          runtime,
-        );
-    }
+    result = await routeBrowserAction(request, runtime, settle);
   } catch {
-    return { ok: false, action, tabId: runtime.selectedTabId, error: { code: "action_failed", message: "Browser action failed" } };
+    result = {
+      ok: false,
+      action,
+      tabId: runtime.selectedTabId,
+      error: { code: "action_failed", message: "Browser action failed" },
+    };
+  }
+  return withCompletion(result, settle);
+}
+
+// One completion record rides every dispatched envelope: successes report
+// whether settling proved, failures say cancelled/timed_out/failed by their
+// error code. Handler-stamped evidence (navigation timeout uncertainty) wins.
+function withCompletion(result: BrowserActionResult, settle?: ActionSettleContext): BrowserActionResult {
+  if (!settle || result.completion) {
+    return result;
+  }
+  const completion: ActionCompletionEvidence = {
+    actionId: settle.actionId,
+    status: deriveStatus(result),
+    elapsedMs: Math.max(0, Date.now() - settle.startedAtMs),
+  };
+  return { ...result, completion };
+}
+
+function deriveStatus(result: BrowserActionResult): ActionCompletionStatus {
+  if (result.ok) {
+    return successCompletion(result);
+  }
+  switch (result.error.code) {
+    case "action_cancelled":
+      return "cancelled";
+    case "lifecycle_timeout":
+      return "timed_out";
+    default:
+      return "failed";
+  }
+}
+
+// Derives success statuses from each family's own evidence so one place maps
+// data shapes to the completed-versus-timed_out distinction.
+function successCompletion(result: Extract<BrowserActionResult, { ok: true }>): ActionCompletionStatus {
+  switch (result.data.kind) {
+    case "click":
+      return clickCompletionStatus(result.data.measured ?? {});
+    case "type":
+    case "clear_input":
+    case "keypress":
+    case "select_option":
+      return signalsCompletionStatus(result.signals);
+    case "scroll":
+    case "scroll_to_text":
+      return scrollCompletionStatus(result.data.measured?.stability);
+    default:
+      return "completed";
+  }
+}
+
+async function routeBrowserAction(
+  request: BrowserActionRequest,
+  runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
+): Promise<BrowserActionResult> {
+  switch (request.action) {
+    case "browser_navigate":
+      return await navigationAction("browser_navigate", () => runtime.navigate(request.input.url, settle), runtime, settle);
+    case "browser_back":
+      return await navigationAction("browser_back", () => runtime.goBack(settle), runtime, settle);
+    case "browser_refresh":
+      return await navigationAction("browser_refresh", () => runtime.refresh(settle), runtime, settle);
+    case "browser_click":
+      return await clickAction(request.input, runtime, settle);
+    case "browser_type":
+      return await mutatingTargetAction(
+        "browser_type",
+        request.input.target,
+        () => runtime.type(request.input.target, request.input.text, settle),
+      );
+    case "browser_clear_input":
+      return await mutatingTargetAction(
+        "browser_clear_input",
+        request.input,
+        () => runtime.clearInput(request.input, settle),
+      );
+    case "browser_keypress":
+      return await keypressAction(request.input, runtime, settle);
+    case "browser_scroll":
+      return await scrollAction(request.input, runtime, settle);
+    case "browser_scroll_to_text":
+      return await scrollToTextAction(request.input, runtime, settle);
+    case "browser_get_select_options":
+      return await selectOptionsAction(request.input, runtime, settle);
+    case "browser_select_option":
+      return await selectOptionAction(request.input, runtime, settle);
+    case "browser_open_tab":
+      return await tabLifecycleAction(
+        "browser_open_tab",
+        () => runtime.openTab(request.input.url, settle),
+        request.input.url,
+        runtime,
+      );
+    case "browser_switch_tab":
+      return await tabLifecycleAction(
+        "browser_switch_tab",
+        () => runtime.switchTab(request.input.tabId, settle),
+        "",
+        runtime,
+      );
+    case "browser_close_tab":
+      return await tabLifecycleAction(
+        "browser_close_tab",
+        () => runtime.closeTab(request.input.tabId, settle),
+        "",
+        runtime,
+      );
   }
 }
 
@@ -131,6 +205,7 @@ async function navigationAction(
   action: "browser_navigate" | "browser_back" | "browser_refresh",
   run: () => Promise<NavResult>,
   runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
 ): Promise<BrowserActionResult> {
   const tabId = runtime.selectedTabId;
   if (tabId === null) {
@@ -145,11 +220,32 @@ async function navigationAction(
   if (!result.ok) {
     return { ok: false, action, tabId, error: result.error };
   }
+  if ("timedOut" in result) {
+    // Dispatched but unproven landing: truthful uncertainty on an envelope
+    // that still reports the invalidation.
+    return {
+      ok: true,
+      action,
+      tabId,
+      url: boundText(result.url),
+      snapshotInvalidated: true,
+      data: actionData(action),
+      ...(settle
+        ? {
+            completion: {
+              actionId: settle.actionId,
+              status: "timed_out" as const,
+              elapsedMs: Math.max(0, Date.now() - settle.startedAtMs),
+            },
+          }
+        : {}),
+    };
+  }
   return {
     ok: true,
     action,
     tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     data: actionData(action),
   };
@@ -169,7 +265,7 @@ async function clickAction(
     ok: true,
     action: "browser_click",
     tabId: target.tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     ...(measured?.signals ? { signals: measured.signals } : {}),
     data: {
@@ -193,7 +289,7 @@ async function mutatingTargetAction(
     ok: true,
     action,
     tabId: target.tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     ...(result.signals ? { signals: result.signals } : {}),
     data: action === "browser_type" ? { kind: "type" } : { kind: "clear_input" },
@@ -222,7 +318,7 @@ async function keypressAction(
     ok: true,
     action: "browser_keypress",
     tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     ...(result.signals ? { signals: result.signals } : {}),
     data: { kind: "keypress" },
@@ -281,7 +377,7 @@ function scrollEnvelope(
     ok: true,
     action,
     tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     ...(measured?.signals ? { signals: measured.signals } : {}),
     data: {
@@ -315,7 +411,7 @@ async function selectOptionsAction(
     ok: true,
     action: "browser_get_select_options",
     tabId: target.tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: false,
     data: {
       kind: "get_select_options",
@@ -340,7 +436,7 @@ async function selectOptionAction(
     ok: true,
     action: "browser_select_option",
     tabId: input.target.tabId,
-    url: result.url,
+    url: boundText(result.url),
     snapshotInvalidated: true,
     ...(result.signals ? { signals: result.signals } : {}),
     data: { kind: "select_option", selectedIndex: result.selectedIndex },
@@ -366,7 +462,7 @@ async function tabLifecycleAction(
   const selectedTab = tabs?.find((tab) => tab.selected);
   const reportedTab = action === "browser_close_tab" && selectedTab ? selectedTab : undefined;
   const tabId = reportedTab?.tabId ?? result.tabId;
-  const url = reportedTab?.url ?? tabs?.find((tab) => tab.tabId === result.tabId)?.url ?? urlFallback;
+  const url = boundText(reportedTab?.url ?? tabs?.find((tab) => tab.tabId === result.tabId)?.url ?? urlFallback);
   return {
     ok: true,
     action,

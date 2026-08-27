@@ -13,6 +13,13 @@ function deferred<T>() {
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+// Coordinator-settled envelopes carry completion evidence with real timing.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function success(action: "browser_navigate"): BrowserActionResult {
   return { ok: true, action, tabId: 7, url: "https://example.com", snapshotInvalidated: true, data: { kind: "navigate" } };
 }
@@ -162,6 +169,7 @@ describe("TabActionCoordinator", () => {
         message: "Browser action was cancelled before dispatch",
         dispatchStarted: false,
       },
+      completion: completes("cancelled"),
     });
     expect(queuedRan).toBe(false);
 
@@ -230,6 +238,7 @@ describe("TabActionCoordinator", () => {
         code: "action_wait_timeout",
         message: "Queue deadline expired before the action was dispatched",
       },
+      completion: completes("timed_out"),
     });
     expect(queuedRan).toBe(false);
 

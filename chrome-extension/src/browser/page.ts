@@ -41,6 +41,7 @@ import { registerNewTabDetector } from "./actions/new-tab";
 import { scrollGroundedTarget, scrollToVisibleText } from "./actions/scroll";
 import { getSelectOptions, selectOption } from "./actions/select";
 import type {
+  ActionCancelledError,
   ActionExpectationPolicy,
   ClearInputResult,
   ClickCapture,
@@ -56,13 +57,15 @@ import type {
   TypeResult,
 } from "./actions/types";
 import { DomActivityWatcher } from "./waits/dom";
-import { scanExpectation } from "./waits/expectation";
+import { waitForExpectationSignal } from "./waits/expectation";
 import { LayoutStabilityWatcher } from "./waits/layout";
 import { NavigationWatcher } from "./waits/navigation";
 import { NetworkActivityWatcher } from "./waits/network";
 import { waitForScrollSettled, type ScrollSettlement, type ScrollSurfaceProbe } from "./waits/scroll";
 import {
   resolveSettleTimings,
+  boundText,
+  boundedCommits,
   type ActionSettleContext,
   type ActionSettleSignals,
   type CommitExpectation,
@@ -88,6 +91,9 @@ export interface PageDeps {
   snapshotStore?: SnapshotStore;
   onCreated?: (listener: (tab: chrome.tabs.Tab) => void) => () => void;
   settleTimings?: Partial<SettleTimings>;
+  // Fires when a live connection dies unexpectedly mid-use (not on teardown
+  // the context itself initiated), so action scheduling can abort its waits.
+  onConnectionReplaced?: (tabId: number) => void;
 }
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
@@ -104,7 +110,8 @@ export interface NavigationReport {
 
 export type NavResult =
   | ({ ok: true; url: string } & NavigationReport)
-  | { ok: false; error: BrowserError };
+  | { ok: true; url: string; timedOut: true }
+  | { ok: false; error: BrowserError | ActionCancelledError };
 
 export type DisconnectResult = { ok: true } | { ok: false; error: BrowserError };
 
@@ -165,7 +172,7 @@ export class BrowserPage {
   private observationQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
 
-  constructor(tabId: number, url: string, deps: PageDeps = defaultDeps) {
+  constructor(tabId: number, url: string, deps: PageDeps = defaultPageDeps) {
     this.tabId = tabId;
     this.url = url;
     this.deps = deps;
@@ -770,7 +777,7 @@ export class BrowserPage {
 
         // Outcome follows the strongest recorded hop regardless of which
         // collector finished first.
-        const commits = navWatcher.allCommits();
+        const commits = boundedCommits(navWatcher.allCommits());
         if (commits.length > 0) {
           measurement.commits = commits;
           measurement.outcome = commits.some((record) => record.kind === "main_commit")
@@ -795,9 +802,9 @@ export class BrowserPage {
     return { capture, finish };
   }
 
-  // Polls role/name counts across live frames until the expectation is exactly
-  // satisfied or the budget ends. Ambiguous rounds keep polling in case the
-  // extra matches were transient; the last verdict wins at the deadline.
+  // Polls role/name counts across live frames until the expectation is
+  // exactly satisfied or the budget ends. The pure probe loop lives in
+  // waits/expectation.ts; page-level failures inside it are handled there.
   private async waitForExpectation(
     page: Page,
     expected: ActionExpectationPolicy,
@@ -805,33 +812,15 @@ export class BrowserPage {
     signal: AbortSignal | undefined,
     pollMs: number,
   ): Promise<ExpectationSignal> {
-    const deadline = Date.now() + budgetMs;
-    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-    for (;;) {
-      if (signal?.aborted) {
-        return { status: "cancelled" };
-      }
-      const scan = await scanExpectation(page, expected);
-      if (expected.intent === "disappear" && scan.total === 0) {
-        return { status: "satisfied", intent: "disappear" };
-      }
-      if (expected.intent === "appear" && scan.total === 1) {
-        const scope = [...scan.scopes][0];
-        return { status: "satisfied", intent: "appear", ...(scope ? { scope } : {}) };
-      }
-      if (Date.now() >= deadline) {
-        return scan.total > 1
-          ? { status: "ambiguous", intent: expected.intent, matches: scan.total }
-          : { status: "unresolved", intent: expected.intent, timeoutMs: budgetMs };
-      }
-      await sleep(pollMs);
-    }
+    return waitForExpectationSignal(page, expected, budgetMs, signal, pollMs);
   }
 
   // Runs one navigation against armed watchers: commit signals stream from
   // the frame tracker, requests are tracked before the Puppeteer call, and
   // completion needs the expected commit, an allowed final URL, and quiet
-  // conditions. Any failure leaves the tab's snapshots stale.
+  // conditions. One overall budget covers dispatch plus settling; an expired
+  // budget after a successful call reports uncertain state instead of
+  // failure, and cancellation mid-barrier reports action_cancelled.
   private async runNavigation(
     run: (page: Page) => Promise<unknown>,
     expected: CommitExpectation,
@@ -846,6 +835,16 @@ export class BrowserPage {
     const watcher = await NavigationWatcher.arm(page, this.identityTracker, resolveSettleTimings(this.deps.settleTimings));
     const capMs = settle?.timeoutMs ?? this.deps.timeoutMs;
     const signal = settle?.signal;
+    const startedAt = Date.now();
+    const left = (): number => Math.max(0, capMs - (Date.now() - startedAt));
+    const cancelError = (): NavResult => ({
+      ok: false,
+      error: {
+        code: "action_cancelled",
+        message: "Browser action was cancelled during dispatch",
+        dispatchStarted: true,
+      },
+    });
     try {
       try {
         await run(page);
@@ -857,28 +856,24 @@ export class BrowserPage {
         return { ok: false, error: { code: "navigation_failed", message: "Navigation failed" } };
       }
 
-      const commit = await watcher.waitForCommit(expected, capMs, signal);
+      const commit = await watcher.waitForCommit(expected, left(), signal);
       if (commit.status === "cancelled") {
-        this.snapshots.invalidate(this.tabId);
-        return { ok: false, error: { code: "navigation_failed", message: "Navigation was cancelled" } };
+        return cancelError();
       }
       if (commit.status === "timeout") {
-        this.snapshots.invalidate(this.tabId);
-        return {
-          ok: false,
-          error: {
-            code: "navigation_failed",
-            message: expected.acceptsSameDocument
-              ? "Navigation produced no route or document commit"
-              : "Navigation produced no document commit",
-          },
-        };
+        // The Puppeteer call succeeded but no commit proved where the page
+        // landed, so the old refs stay stale and the outcome is uncertainty,
+        // not failure.
+        return { ok: true, url: boundText(page.url()), timedOut: true };
       }
 
       // Hops may land during the quiet window, so the final URL and its
       // policy verdict are read after settling.
-      const signals = await watcher.waitForQuiet(capMs, signal);
-      const finalUrl = page.url();
+      const signals = await watcher.waitForQuiet(left(), signal);
+      if (signal?.aborted) {
+        return cancelError();
+      }
+      const finalUrl = boundText(page.url());
       const redirect = redirectPolicyError(finalUrl);
       if (redirect) {
         this.snapshots.invalidate(this.tabId);
@@ -891,7 +886,7 @@ export class BrowserPage {
         commitType: commit.match.kind === "same_document" ? "same_document" : "commit",
         documentEpoch: commit.match.documentEpoch,
         navigationEpoch: commit.match.navigationEpoch,
-        commits: watcher.allCommits(),
+        commits: boundedCommits(watcher.allCommits()),
         signals,
       };
     } finally {
@@ -908,6 +903,11 @@ export class BrowserPage {
       this.identityTracker?.dispose();
       this.identityTracker = null;
       this.snapshots.invalidate(this.tabId);
+      try {
+        this.deps.onConnectionReplaced?.(this.tabId);
+      } catch {
+        // Teardown notifications must never mask the action's own result.
+      }
     }
   }
 }
@@ -1220,7 +1220,7 @@ function pathOfElement(el: Element): PathStep[] | null {
   return node ? reversed.reverse() : null;
 }
 
-const defaultDeps: PageDeps = {
+export const defaultPageDeps: PageDeps = {
   connect,
   connectTab: (tabId) => ExtensionTransport.connectTab(tabId),
   timeoutMs: DEFAULT_NAVIGATION_TIMEOUT_MS,

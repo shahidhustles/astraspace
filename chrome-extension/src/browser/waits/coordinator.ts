@@ -10,6 +10,8 @@ import type {
 import {
   DEFAULT_QUEUE_DEADLINE_MS,
   createActionId,
+  type ActionAbortCause,
+  type ActionCompletionEvidence,
   type ActionDispatchBudget,
   type ActionId,
 } from "./types";
@@ -24,6 +26,7 @@ export interface ActionWorkInput {
 }
 
 interface Lane {
+  readonly tabId: number;
   queue: QueueEntry[];
   tail: Promise<void>;
 }
@@ -47,6 +50,26 @@ type DispatchOutcome =
   | { kind: "result"; result: BrowserActionResult }
   | { kind: "thrown"; error: unknown };
 
+// Lifecycle aborts reuse existing error codes, with stable messages that name
+// the cause. Tab removal maps to missing_tab; the other three all leave the
+// page unusable, so they surface as selected_tab_unavailable.
+type LifecycleAbortError =
+  | { code: "missing_tab"; message: string }
+  | { code: "selected_tab_unavailable"; message: string };
+
+function lifecycleAbortError(cause: ActionAbortCause): LifecycleAbortError {
+  switch (cause) {
+    case "tab_removed":
+      return { code: "missing_tab", message: "Tab closed during the action" };
+    case "debugger_detached":
+      return { code: "selected_tab_unavailable", message: "Debugger detached during the action" };
+    case "connection_replaced":
+      return { code: "selected_tab_unavailable", message: "Connection was replaced during the action" };
+    case "runtime_cleanup":
+      return { code: "selected_tab_unavailable", message: "Browser runtime cleaned up during the action" };
+  }
+}
+
 // Serializes action work per tab. Each tab owns one FIFO lane and its own
 // abort controllers, so actions on separate tabs never wait on each other.
 export class TabActionCoordinator {
@@ -55,6 +78,14 @@ export class TabActionCoordinator {
 
   get liveCount(): number {
     return this.live.size;
+  }
+
+  get queueCount(): number {
+    let total = 0;
+    for (const lane of this.lanes.values()) {
+      total += lane.queue.length;
+    }
+    return total;
   }
 
   enqueue(input: ActionWorkInput): ScheduledAction {
@@ -106,6 +137,7 @@ export class TabActionCoordinator {
       };
     }
 
+    const completion = this.cancelledEvidence(entry);
     this.retire(entry);
     if (entry.state === "queued") {
       this.removeQueued(entry);
@@ -118,6 +150,7 @@ export class TabActionCoordinator {
           message: "Browser action was cancelled before dispatch",
           dispatchStarted: false,
         },
+        completion,
       });
       return { ok: true, actionId: id, cancelled: true, dispatchStarted: false };
     }
@@ -126,12 +159,54 @@ export class TabActionCoordinator {
     return { ok: true, actionId: id, cancelled: true, dispatchStarted: true };
   }
 
+  // Settles every queued and active action on one tab because its connection
+  // is gone (tab closed, debugger detached, generation replaced). Queued
+  // entries never run afterward.
+  abortForTab(tabId: number, cause: ActionAbortCause): void {
+    this.abortEntries([...this.live.values()].filter((entry) => entry.tabId === tabId), cause);
+  }
+
+  abortAll(cause: ActionAbortCause): void {
+    this.abortEntries([...this.live.values()], cause);
+  }
+
+  private abortEntries(entries: QueueEntry[], cause: ActionAbortCause): void {
+    for (const entry of entries) {
+      const wasQueued = entry.state === "queued";
+      this.retire(entry);
+      if (wasQueued) {
+        this.removeQueued(entry);
+      } else {
+        entry.controller.abort();
+      }
+      entry.resolveSettled({
+        ok: false,
+        action: entry.name,
+        tabId: entry.tabId,
+        error: lifecycleAbortError(cause),
+        completion: {
+          actionId: entry.id,
+          status: "failed",
+          elapsedMs: Date.now() - entry.acceptedAt,
+        },
+      });
+    }
+  }
+
+  private cancelledEvidence(entry: QueueEntry): ActionCompletionEvidence {
+    return {
+      actionId: entry.id,
+      status: "cancelled",
+      elapsedMs: Date.now() - entry.acceptedAt,
+    };
+  }
+
   private obtainLane(tabId: number): Lane {
     const existing = this.lanes.get(tabId);
     if (existing) {
       return existing;
     }
-    const lane: Lane = { queue: [], tail: Promise.resolve() };
+    const lane: Lane = { tabId, queue: [], tail: Promise.resolve() };
     this.lanes.set(tabId, lane);
     return lane;
   }
@@ -143,6 +218,11 @@ export class TabActionCoordinator {
         return;
       }
       await this.dispatchEntry(entry);
+    }
+    // The lane ran dry with nothing in flight, so forget it. A later enqueue
+    // for the same tab simply opens a fresh lane.
+    if (lane.queue.length === 0 && this.lanes.get(lane.tabId) === lane) {
+      this.lanes.delete(lane.tabId);
     }
   }
 
@@ -175,6 +255,7 @@ export class TabActionCoordinator {
             message: "Browser action was cancelled during dispatch",
             dispatchStarted: true,
           },
+          completion: this.cancelledEvidence(entry),
         };
         break;
       case "thrown":
@@ -183,6 +264,11 @@ export class TabActionCoordinator {
           action: entry.name,
           tabId: entry.tabId,
           error: { code: "action_failed", message: "Browser action failed" },
+          completion: {
+            actionId: entry.id,
+            status: "failed",
+            elapsedMs: Date.now() - entry.acceptedAt,
+          },
         };
         break;
       default: {
@@ -230,6 +316,7 @@ export class TabActionCoordinator {
         timeoutMs: remaining,
         expectation: entry.expectation,
         actionId: entry.id,
+        startedAtMs: entry.acceptedAt,
       });
     } catch (error) {
       return Promise.reject(error);
@@ -249,6 +336,11 @@ export class TabActionCoordinator {
       error: {
         code: "action_wait_timeout",
         message: "Queue deadline expired before the action was dispatched",
+      },
+      completion: {
+        actionId: entry.id,
+        status: "timed_out",
+        elapsedMs: Date.now() - entry.acceptedAt,
       },
     });
   }
@@ -298,6 +390,7 @@ export function enqueueActionRequest(
         timeoutMs: budget.timeoutMs,
         expectation: budget.expectation,
         actionId: budget.actionId,
+        startedAtMs: budget.startedAtMs,
       }),
   });
 }

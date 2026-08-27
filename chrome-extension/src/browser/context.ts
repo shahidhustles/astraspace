@@ -1,5 +1,6 @@
 import { enforceUrlPolicy } from "./url-policy";
-import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
+import { boundText } from "./waits/types";
+import { BrowserPage, defaultPageDeps, type AttachResult, type NavResult, type PageDeps } from "./page";
 import { enqueueActionRequest } from "./waits/coordinator";
 import {
   type BrowserActionCancelReply,
@@ -166,8 +167,8 @@ export class BrowserContext {
       const page = this.pages.get(tab.id);
       listed.push({
         tabId: tab.id,
-        url: tab.url,
-        title: tab.title ?? "",
+        url: boundText(tab.url),
+        title: boundText(tab.title ?? ""),
         attached: page?.attached ?? false,
         selected: tab.id === this.selectedTab,
       });
@@ -300,12 +301,12 @@ export class BrowserContext {
     );
   }
 
-  async navigate(url: string): Promise<NavResult> {
+  async navigate(url: string, settle?: ActionSettleContext): Promise<NavResult> {
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.navigate(url);
+    return page.navigate(url, settle);
   }
 
   async observe(): Promise<ObservationResult> {
@@ -353,20 +354,20 @@ export class BrowserContext {
     return { ok: true, state: { ...committed.state, tabs: tabsResult.tabs } };
   }
 
-  async goBack(): Promise<NavResult> {
+  async goBack(settle?: ActionSettleContext): Promise<NavResult> {
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.goBack();
+    return page.goBack(settle);
   }
 
-  async refresh(): Promise<NavResult> {
+  async refresh(settle?: ActionSettleContext): Promise<NavResult> {
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.reload();
+    return page.reload(settle);
   }
 
   async click(target: GroundedTarget, settle?: ActionSettleContext): Promise<ClickResult> {
@@ -470,9 +471,13 @@ export class BrowserContext {
       case "chrome_error":
         return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
       case "timeout":
+        // removeTab was already dispatched; Chrome just never answered.
+        // That is uncertainty about a dispatched mutation, not a queue
+        // expiry, so it reports lifecycle_timeout instead of
+        // action_wait_timeout. Local state stays until removal is proven.
         return {
           ok: false,
-          error: { code: "action_wait_timeout", message: "Close did not finish before the deadline" },
+          error: { code: "lifecycle_timeout", message: "Close did not finish before the deadline" },
         };
       case "cancelled":
         return {
@@ -579,6 +584,9 @@ export class BrowserContext {
 
   async cleanup(): Promise<CleanupResult> {
     const failures: BrowserError[] = [];
+    // Settle every live action with the cleanup cause before tearing down
+    // pages, so waits end on evidence instead of dying silently.
+    this.actionCoordinator.abortAll("runtime_cleanup");
     for (const page of this.pages.values()) {
       const result = await page.disconnect();
       if (!result.ok) {
@@ -596,11 +604,15 @@ export class BrowserContext {
 
   private handleTabRemoved(tabId: number): void {
     this.discardPage(tabId);
+    // Any action still queued or dispatching against the closed tab must end
+    // now, with the lifecycle cause that ended it.
+    this.actionCoordinator.abortForTab(tabId, "tab_removed");
   }
 
   private handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
     if (source.tabId !== undefined) {
       this.discardPage(source.tabId);
+      this.actionCoordinator.abortForTab(source.tabId, "debugger_detached");
     }
   }
 
@@ -642,9 +654,24 @@ export class BrowserContext {
       return this.runAttach(existing);
     }
 
-    const page = new BrowserPage(tabId, url, this.deps.pageDeps);
+    const page = new BrowserPage(tabId, url, this.pageDepsFor(tabId));
     this.pages.set(tabId, page);
     return this.runAttach(page);
+  }
+
+  // Page deps gain one hook: an unexpected connection death mid-action
+  // (never context-initiated teardown) aborts that tab's scheduled actions.
+  private pageDepsFor(tabId: number): PageDeps {
+    const base = this.deps.pageDeps ?? defaultPageDeps;
+    return {
+      ...base,
+      onConnectionReplaced: (replacedTabId) => {
+        base.onConnectionReplaced?.(replacedTabId);
+        if (replacedTabId === tabId) {
+          this.actionCoordinator.abortForTab(replacedTabId, "connection_replaced");
+        }
+      },
+    };
   }
 
   private runAttach(page: BrowserPage): Promise<AttachResult> {

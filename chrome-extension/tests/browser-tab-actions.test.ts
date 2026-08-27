@@ -22,6 +22,13 @@ const OPEN_MEASURED = completed("open-id", "controllable_url_and_attach");
 const SWITCH_MEASURED = completed("switch-id", "activation_and_attach");
 const CLOSE_MEASURED = completed("close-id", "removal_confirmed");
 
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 9,
@@ -62,6 +69,7 @@ describe("browser_open_tab", () => {
       url: "https://opened.example",
       snapshotInvalidated: false,
       data: { kind: "open_tab", tabs: TABS, measured: OPEN_MEASURED },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -99,6 +107,7 @@ describe("browser_open_tab", () => {
       url: "https://opened.example",
       snapshotInvalidated: false,
       data: { kind: "open_tab", tabs: null, measured: OPEN_MEASURED },
+      completion: completes("completed"),
     });
   });
 
@@ -120,6 +129,7 @@ describe("browser_open_tab", () => {
       action: "browser_open_tab",
       tabId: 9,
       error: { code: "url_denied", message: "Blocked URL scheme: chrome-extension:", url: "chrome-extension://x" },
+      completion: completes("failed"),
     });
   });
 
@@ -161,6 +171,7 @@ describe("browser_switch_tab", () => {
       url: "https://opened.example",
       snapshotInvalidated: false,
       data: { kind: "switch_tab", tabs: TABS, measured: SWITCH_MEASURED },
+      completion: completes("completed"),
     });
   });
 
@@ -179,6 +190,7 @@ describe("browser_switch_tab", () => {
       action: "browser_switch_tab",
       tabId: 9,
       error: { code: "missing_tab", message: "No such tab" },
+      completion: completes("failed"),
     });
   });
 
@@ -230,6 +242,7 @@ describe("browser_close_tab", () => {
       url: "https://opened.example",
       snapshotInvalidated: true,
       data: { kind: "close_tab", tabs: [TABS[1]], measured: CLOSE_MEASURED },
+      completion: completes("completed"),
     });
   });
 
@@ -261,6 +274,7 @@ describe("browser_close_tab", () => {
       action: "browser_close_tab",
       tabId: 9,
       error: { code: "missing_tab", message: "No such tab" },
+      completion: completes("failed"),
     });
   });
 

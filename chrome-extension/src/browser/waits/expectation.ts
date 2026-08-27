@@ -1,6 +1,7 @@
 import type { Frame, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { ActionExpectationPolicy } from "../actions/types";
 import type { ExpectationScope } from "./types";
+import type { ExpectationSignal } from "./types";
 
 // Counts elements whose accessible role and name equal the expectation exactly,
 // over light DOM and open shadow roots of one execution context. Hidden
@@ -126,4 +127,49 @@ export async function scanExpectation(
     }
   }
   return { total, scopes };
+}
+
+// Polls role/name counts across live frames until the expectation is exactly
+// satisfied or the budget ends. Ambiguous rounds keep polling in case the
+// extra matches were transient; the last verdict wins at the deadline. The
+// read-only scan may retry once on a transient failure, always inside the
+// original budget.
+export async function waitForExpectationSignal(
+  page: Page,
+  expected: ActionExpectationPolicy,
+  budgetMs: number,
+  signal: AbortSignal | undefined,
+  pollMs: number,
+): Promise<ExpectationSignal> {
+  const deadline = Date.now() + budgetMs;
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  let probeRetried = false;
+  let scan: ExpectationScanResult;
+  for (;;) {
+    if (signal?.aborted) {
+      return { status: "cancelled" };
+    }
+    try {
+      scan = await scanExpectation(page, expected);
+    } catch {
+      if (!probeRetried && Date.now() < deadline) {
+        probeRetried = true;
+        continue;
+      }
+      return { status: "unresolved", intent: expected.intent, timeoutMs: budgetMs };
+    }
+    if (expected.intent === "disappear" && scan.total === 0) {
+      return { status: "satisfied", intent: "disappear" };
+    }
+    if (expected.intent === "appear" && scan.total === 1) {
+      const scope = [...scan.scopes][0];
+      return { status: "satisfied", intent: "appear", ...(scope ? { scope } : {}) };
+    }
+    if (Date.now() >= deadline) {
+      return scan.total > 1
+        ? { status: "ambiguous", intent: expected.intent, matches: scan.total }
+        : { status: "unresolved", intent: expected.intent, timeoutMs: budgetMs };
+    }
+    await sleep(pollMs);
+  }
 }

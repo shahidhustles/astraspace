@@ -12,6 +12,14 @@ const TARGET: GroundedTarget = {
   ref: 2,
 };
 
+
+// Dispatched envelopes carry completion evidence whose id and timing vary.
+const completes = (status: string) => ({
+  actionId: expect.any(String),
+  status,
+  elapsedMs: expect.any(Number),
+});
+
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
   return attachTabActionCoordinator({
     selectedTabId: 7,
@@ -63,6 +71,7 @@ describe("browser_keypress dispatch", () => {
       url: "https://example.com/final",
       snapshotInvalidated: true,
       data: { kind: "keypress" },
+      completion: completes("completed"),
     });
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
   });
@@ -117,6 +126,7 @@ describe("browser_keypress dispatch", () => {
       action: "browser_keypress",
       tabId: 7,
       error: { code: "stale_ref", message: "stale", target: TARGET },
+      completion: completes("failed"),
     });
   });
 
@@ -161,6 +171,7 @@ describe("browser_keypress dispatch", () => {
       action: "browser_keypress",
       tabId: 7,
       error: { code: "action_failed", message: "Browser action failed" },
+      completion: completes("failed"),
     });
   });
 
