@@ -374,6 +374,7 @@ function fakePage(win: Window, main: FakeFrame, session: FakeSession, currentUrl
     const name = rawName?.replace(/\s+/g, " ").trim();
     return { role: role ?? undefined, name: name || undefined };
   };
+  const emitter = new EventEmitter();
   const page = {
     currentUrl,
     main,
@@ -381,7 +382,17 @@ function fakePage(win: Window, main: FakeFrame, session: FakeSession, currentUrl
     createCDPSession: async () => session,
     _client: () => session,
     mainFrame: () => main,
-    goto: async () => ({}),
+    frames: () => [],
+    on: (event: string, fn: (...args: unknown[]) => void) => emitter.on(event, fn),
+    off: (event: string, fn: (...args: unknown[]) => void) => emitter.off(event, fn),
+    goto: async (url: string) => {
+      // A successful goto commits a new main-frame document.
+      session.emit("Page.frameNavigated", {
+        frame: { id: MAIN_FRAME_ID, loaderId: "L2", url },
+        type: "Navigation",
+      });
+      return {};
+    },
     title: async () => "Resolution fixture",
     accessibility: {
       snapshot: accessibilitySnapshot,

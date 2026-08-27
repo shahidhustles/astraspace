@@ -1,4 +1,4 @@
-import type { UrlPolicyResult } from "./types";
+import type { UnsupportedRedirectError, UrlPolicyResult } from "./types";
 
 const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
 const UNSUPPORTED_PROTOCOLS = new Set(["chrome:", "chrome-extension:", "about:"]);
@@ -45,4 +45,13 @@ export function enforceUrlPolicy(raw: string): UrlPolicyResult {
   }
 
   return { ok: true, url: parsed.toString() };
+}
+
+// Classifies a navigation's final URL. Any disallowed destination counts as
+// an unsupported redirect and fails closed with the tab's typed error.
+export function redirectPolicyError(raw: string): UnsupportedRedirectError | null {
+  if (enforceUrlPolicy(raw).ok) {
+    return null;
+  }
+  return { code: "unsupported_redirect", message: "Navigation ended on an unsupported page", url: raw };
 }

@@ -33,7 +33,7 @@ import {
 import type { OwnerMap } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
-import { enforceUrlPolicy } from "./url-policy";
+import { enforceUrlPolicy, redirectPolicyError } from "./url-policy";
 import { clickGroundedTarget } from "./actions/element";
 import { clearGroundedTarget, typeGroundedTarget } from "./actions/input";
 import { keypressGroundedTarget } from "./actions/keyboard";
@@ -52,11 +52,14 @@ import type {
   TypeResult,
 } from "./actions/types";
 import { DomActivityWatcher } from "./waits/dom";
+import { NavigationWatcher } from "./waits/navigation";
 import { NetworkActivityWatcher } from "./waits/network";
 import {
   resolveSettleTimings,
   type ActionSettleContext,
   type ActionSettleSignals,
+  type CommitExpectation,
+  type NavigationCommitRecord,
   type SettleTimings,
 } from "./waits/types";
 import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
@@ -75,7 +78,19 @@ export interface PageDeps {
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
 
-export type NavResult = { ok: true; url: string } | { ok: false; error: BrowserError };
+// Successful navigations prove the commit that landed, the identity it gave
+// the document, every hop recorded along the way, and the quiet state after.
+export interface NavigationReport {
+  commitType: "commit" | "same_document";
+  documentEpoch: number;
+  navigationEpoch: number;
+  commits: NavigationCommitRecord[];
+  signals: ActionSettleSignals;
+}
+
+export type NavResult =
+  | ({ ok: true; url: string } & NavigationReport)
+  | { ok: false; error: BrowserError };
 
 export type DisconnectResult = { ok: true } | { ok: false; error: BrowserError };
 
@@ -219,20 +234,22 @@ export class BrowserPage {
     }
   }
 
-  async navigate(url: string): Promise<NavResult> {
+  async navigate(url: string, settle?: ActionSettleContext): Promise<NavResult> {
     const policy = enforceUrlPolicy(url);
     if (!policy.ok) {
       return { ok: false, error: policy.error };
     }
-    return this.runNavigation((page) => page.goto(url, this.navOptions()));
+    return this.runNavigation((page) => page.goto(url, this.navOptions()), { acceptsSameDocument: false }, settle);
   }
 
-  async goBack(): Promise<NavResult> {
-    return this.runNavigation((page) => page.goBack(this.navOptions()));
+  async goBack(settle?: ActionSettleContext): Promise<NavResult> {
+    // History may step between same-document entries, so back accepts both
+    // commit shapes.
+    return this.runNavigation((page) => page.goBack(this.navOptions()), { acceptsSameDocument: true }, settle);
   }
 
-  async reload(): Promise<NavResult> {
-    return this.runNavigation((page) => page.reload(this.navOptions()));
+  async reload(settle?: ActionSettleContext): Promise<NavResult> {
+    return this.runNavigation((page) => page.reload(this.navOptions()), { acceptsSameDocument: false }, settle);
   }
 
   async click(target: GroundedTarget): Promise<ClickResult> {
@@ -577,32 +594,75 @@ export class BrowserPage {
     return { timeout: this.deps.timeoutMs, waitUntil: "load" as const };
   }
 
-  private async runNavigation(run: (page: Page) => Promise<unknown>): Promise<NavResult> {
-    if (!this.attached || !this.puppeteerPage) {
+  // Runs one navigation against armed watchers: commit signals stream from
+  // the frame tracker, requests are tracked before the Puppeteer call, and
+  // completion needs the expected commit, an allowed final URL, and quiet
+  // conditions. Any failure leaves the tab's snapshots stale.
+  private async runNavigation(
+    run: (page: Page) => Promise<unknown>,
+    expected: CommitExpectation,
+    settle?: ActionSettleContext,
+  ): Promise<NavResult> {
+    if (!this.attached || !this.puppeteerPage || !this.identityTracker) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
     this.snapshots.invalidate(this.tabId);
 
     const page = this.puppeteerPage;
+    const watcher = await NavigationWatcher.arm(page, this.identityTracker, resolveSettleTimings(this.deps.settleTimings));
+    const capMs = settle?.timeoutMs ?? this.deps.timeoutMs;
+    const signal = settle?.signal;
     try {
-      await run(page);
-    } catch (error) {
-      this.detachIfDisconnected();
-      if (error instanceof Error && error.name === "TimeoutError") {
-        return { ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } };
+      try {
+        await run(page);
+      } catch (error) {
+        this.detachIfDisconnected();
+        if (error instanceof Error && error.name === "TimeoutError") {
+          return { ok: false, error: { code: "navigation_timeout", message: "Navigation timed out" } };
+        }
+        return { ok: false, error: { code: "navigation_failed", message: "Navigation failed" } };
       }
-      return { ok: false, error: { code: "navigation_failed", message: "Navigation failed" } };
-    }
 
-    const finalUrl = page.url();
-    const policy = enforceUrlPolicy(finalUrl);
-    if (!policy.ok) {
+      const commit = await watcher.waitForCommit(expected, capMs, signal);
+      if (commit.status === "cancelled") {
+        this.snapshots.invalidate(this.tabId);
+        return { ok: false, error: { code: "navigation_failed", message: "Navigation was cancelled" } };
+      }
+      if (commit.status === "timeout") {
+        this.snapshots.invalidate(this.tabId);
+        return {
+          ok: false,
+          error: {
+            code: "navigation_failed",
+            message: expected.acceptsSameDocument
+              ? "Navigation produced no route or document commit"
+              : "Navigation produced no document commit",
+          },
+        };
+      }
+
+      // Hops may land during the quiet window, so the final URL and its
+      // policy verdict are read after settling.
+      const signals = await watcher.waitForQuiet(capMs, signal);
+      const finalUrl = page.url();
+      const redirect = redirectPolicyError(finalUrl);
+      if (redirect) {
+        this.snapshots.invalidate(this.tabId);
+        return { ok: false, error: redirect };
+      }
+
       return {
-        ok: false,
-        error: { code: "unsupported_redirect", message: "Navigation ended on an unsupported page", url: finalUrl },
+        ok: true,
+        url: finalUrl,
+        commitType: commit.match.kind === "same_document" ? "same_document" : "commit",
+        documentEpoch: commit.match.documentEpoch,
+        navigationEpoch: commit.match.navigationEpoch,
+        commits: watcher.allCommits(),
+        signals,
       };
+    } finally {
+      watcher.dispose();
     }
-    return { ok: true, url: finalUrl };
   }
 
   private detachIfDisconnected(): void {

@@ -65,3 +65,30 @@ export function createActionId(): ActionId {
 export function toActionId(candidate: string): ActionId {
   return candidate as ActionId;
 }
+
+// One recorded commit from the frame graph. `main_commit` is a new document
+// on the main frame, `same_document` a route change without document swap,
+// and `child_commit` the same document-swap signal for any child frame.
+export type CommitKind = "main_commit" | "same_document" | "child_commit";
+
+export interface NavigationCommitRecord {
+  readonly kind: CommitKind;
+  readonly frameId: string;
+  readonly parentFrameId: string | null;
+  readonly oldUrl: string;
+  readonly newUrl: string;
+  readonly loaderId: string;
+  readonly documentEpoch: number;
+  readonly navigationEpoch: number;
+}
+
+// Whether an action may complete on a same-document signal or needs a real
+// document swap. Main-frame commits always count.
+export interface CommitExpectation {
+  acceptsSameDocument: boolean;
+}
+
+export type CommitWaitOutcome =
+  | { status: "matched"; match: NavigationCommitRecord }
+  | { status: "timeout"; timeoutMs: number }
+  | { status: "cancelled" };

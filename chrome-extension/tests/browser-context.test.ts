@@ -43,27 +43,48 @@ class FakeSession extends EventEmitter {
 }
 
 function fakePage(): FakePage {
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(50);
+  let session: FakeSession | null = null;
   const page = {
     gotoCalls: 0,
     goBackCalls: 0,
     reloadCalls: 0,
     currentUrl: "https://example.com",
     gotoError: null,
+    frames: () => [],
+    on: (event: string, fn: (...args: unknown[]) => void) => emitter.on(event, fn),
+    off: (event: string, fn: (...args: unknown[]) => void) => emitter.off(event, fn),
     createCDPSession: async () => new FakeSession(),
-    _client: () => new FakeSession(),
-    goto: async () => {
+    _client: () => {
+      if (!session) {
+        session = new FakeSession();
+      }
+      return session;
+    },
+    goto: async (url: string) => {
       page.gotoCalls += 1;
       if (page.gotoError) {
         throw page.gotoError;
       }
+      page.currentUrl = url;
+      session?.emit("Page.frameNavigated", {
+        frame: { id: "main-1", loaderId: `L${page.gotoCalls + 1}`, url },
+        type: "Navigation",
+      });
       return {};
     },
     goBack: async () => {
       page.goBackCalls += 1;
+      session?.emit("Page.navigatedWithinDocument", { frameId: "main-1", url: page.currentUrl });
       return {};
     },
     reload: async () => {
       page.reloadCalls += 1;
+      session?.emit("Page.frameNavigated", {
+        frame: { id: "main-1", loaderId: `L-r${page.reloadCalls}`, url: page.currentUrl },
+        type: "Navigation",
+      });
       return {};
     },
     url: () => page.currentUrl,
@@ -138,6 +159,8 @@ function setup(overrides: {
       connectTabCalls += 1;
       return {} as never;
     },
+    timeoutMs: 100,
+    settleTimings: { domQuietMs: 1, networkQuietMs: 1, pollMs: 1 },
     ...overrides,
   };
   const snapshotStore = overrides.snapshotStore ?? new SpyStore();
@@ -686,7 +709,13 @@ describe("BrowserContext", () => {
 
     const result = await context.navigate("https://example.com/target");
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/target" });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        url: "https://example.com/target",
+        commitType: "commit",
+      }),
+    );
     expect(page.gotoCalls).toBe(1);
     expect(context.selectedTabId).toBe(7);
   });
@@ -735,7 +764,13 @@ describe("BrowserContext", () => {
 
     const result = await context.goBack();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        url: "https://example.com/start",
+        commitType: "same_document",
+      }),
+    );
     expect(page.goBackCalls).toBe(1);
   });
 
@@ -756,7 +791,13 @@ describe("BrowserContext", () => {
 
     const result = await context.refresh();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com" });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        url: "https://example.com",
+        commitType: "commit",
+      }),
+    );
     expect(page.reloadCalls).toBe(1);
   });
 

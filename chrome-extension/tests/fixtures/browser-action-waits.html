@@ -48,6 +48,13 @@
     </select>
     <div id="chips"></div>
 
+    <h2>Navigation</h2>
+    <button id="push-route" type="button">Push route</button>
+    <button id="deferred-nav" type="button">Deferred nav</button>
+    <button id="spawn-iframe" type="button">Spawn frame</button>
+    <div id="iframe-host"></div>
+    <div id="nav-log"></div>
+
     <div id="log"></div>
 
     <script>
@@ -121,6 +128,53 @@
           });
           log("chips-rendered:" + choice);
         }, 200);
+      });
+
+      // Navigation hooks. Everything below stays inert unless a test drives
+      // it, so edit-settling scenarios never see this machinery.
+      function navLog(entry) {
+        var line = document.createElement("div");
+        line.textContent = entry;
+        document.getElementById("nav-log").appendChild(line);
+      }
+
+      window.__setChildSrc = function (src) {
+        navLog("child-src-armed");
+        var frame = document.createElement("iframe");
+        frame.id = "child-frame";
+        frame.src = src;
+        document.getElementById("iframe-host").appendChild(frame);
+      };
+
+      window.__swapChildSrc = function (src) {
+        navLog("child-swap");
+        var frame = document.querySelector("#iframe-host iframe");
+        if (!frame) return;
+        frame.contentWindow.location.replace(src);
+      };
+
+      window.__pushRoute = function () {
+        history.pushState({ route: "#route" }, "", "#route");
+        navLog("route-pushed");
+      };
+
+      window.__deferredNavigate = function () {
+        setTimeout(function () { location.assign("?step=2"); }, 150);
+      };
+
+      var params = new URLSearchParams(location.search);
+      var childParam = params.get("child");
+      if (childParam) {
+        var bootFrame = document.createElement("iframe");
+        bootFrame.id = "child-frame";
+        bootFrame.src = decodeURIComponent(childParam);
+        document.getElementById("iframe-host").appendChild(bootFrame);
+      }
+
+      document.getElementById("push-route").addEventListener("click", function () { window.__pushRoute(); });
+      document.getElementById("deferred-nav").addEventListener("click", function () { window.__deferredNavigate(); });
+      document.getElementById("spawn-iframe").addEventListener("click", function () {
+        window.__setChildSrc("/child.html");
       });
     </script>
   </body>

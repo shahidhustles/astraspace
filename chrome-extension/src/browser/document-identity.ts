@@ -1,5 +1,6 @@
 import type { CDPSession, Protocol } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { FrameLineageStep } from "./observation/types";
+import type { CommitKind, NavigationCommitRecord } from "./waits/types";
 
 export interface FrameIdentity {
   readonly documentEpoch: number;
@@ -55,6 +56,7 @@ export class FrameGraphTracker {
   private readonly session: CDPSession;
   private readonly detachOnDispose: boolean;
   private readonly onChange: (() => void) | undefined;
+  private readonly commitListeners = new Set<(record: NavigationCommitRecord) => void>();
   private readonly records = new Map<string, InternalFrameRecord>();
   private rootFrameId: string;
   private graphVersion = 0;
@@ -137,6 +139,16 @@ export class FrameGraphTracker {
             retired: false,
           });
           this.graphVersion += 1;
+          this.emitCommit({
+            kind: "main_commit",
+            frameId: frame.id,
+            parentFrameId: null,
+            oldUrl: previousRoot?.url ?? "",
+            newUrl: frame.url,
+            loaderId: frame.loaderId,
+            documentEpoch,
+            navigationEpoch,
+          });
           this.onChange?.();
           return;
         }
@@ -151,11 +163,23 @@ export class FrameGraphTracker {
           retired: false,
         });
         this.graphVersion += 1;
+        this.emitCommit({
+          kind: "child_commit",
+          frameId: frame.id,
+          parentFrameId: frame.parentId ?? null,
+          oldUrl: "",
+          newUrl: frame.url,
+          loaderId: frame.loaderId,
+          documentEpoch: 0,
+          navigationEpoch: 0,
+        });
         return;
       }
       if (frame.loaderId === record.loaderId) {
         return;
       }
+      const kind: CommitKind = frame.id === this.rootFrameId ? "main_commit" : "child_commit";
+      const oldUrl = record.url;
       record.loaderId = frame.loaderId;
       record.url = frame.url;
       record.documentEpoch += 1;
@@ -166,6 +190,16 @@ export class FrameGraphTracker {
         this.retireSubtree(child.frameId);
       }
       this.graphVersion += 1;
+      this.emitCommit({
+        kind,
+        frameId: frame.id,
+        parentFrameId: record.parentFrameId,
+        oldUrl,
+        newUrl: frame.url,
+        loaderId: frame.loaderId,
+        documentEpoch: record.documentEpoch,
+        navigationEpoch: record.navigationEpoch,
+      });
       if (frame.id === this.rootFrameId) {
         this.onChange?.();
       }
@@ -178,9 +212,21 @@ export class FrameGraphTracker {
       if (!record) {
         return;
       }
+      const kind: CommitKind = event.frameId === this.rootFrameId ? "same_document" : "child_commit";
+      const oldUrl = record.url;
       record.navigationEpoch += 1;
       record.url = event.url;
       this.graphVersion += 1;
+      this.emitCommit({
+        kind,
+        frameId: event.frameId,
+        parentFrameId: record.parentFrameId,
+        oldUrl,
+        newUrl: event.url,
+        loaderId: record.loaderId,
+        documentEpoch: record.documentEpoch,
+        navigationEpoch: record.navigationEpoch,
+      });
       if (event.frameId === this.rootFrameId) {
         this.onChange?.();
       }
@@ -206,6 +252,19 @@ export class FrameGraphTracker {
     );
     tracker.ingestFrameTree(frameTree);
     return tracker;
+  }
+
+  // Subscribes one listener to commit records until the returned unsubscribe
+  // runs or the tracker is disposed.
+  onCommit(listener: (record: NavigationCommitRecord) => void): () => void {
+    this.commitListeners.add(listener);
+    return () => this.commitListeners.delete(listener);
+  }
+
+  private emitCommit(record: NavigationCommitRecord): void {
+    for (const listener of this.commitListeners) {
+      listener(record);
+    }
   }
 
   get identity(): FrameIdentity {

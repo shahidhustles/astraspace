@@ -4,6 +4,17 @@ import type { Browser, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-
 import { BrowserPage, type PageDeps } from "../src/browser/page";
 import { SnapshotStore } from "../src/browser/snapshot";
 
+// Fast settle windows keep navigation completions off the production clocks.
+const TEST_SETTLE_TIMINGS = { domQuietMs: 1, networkQuietMs: 1, pollMs: 1 };
+
+// Loose matchers for the measured quiet spans whose idleMs values vary.
+function quietSignals() {
+  return {
+    network: expect.objectContaining({ status: "quiet" }),
+    dom: expect.objectContaining({ status: "quiet" }),
+  };
+}
+
 class SpyStore extends SnapshotStore {
   invalidatedTabs: number[] = [];
 
@@ -52,6 +63,8 @@ class FakeSession extends EventEmitter {
 
 function fakePage(currentUrl = "https://example.com"): FakePage {
   const session = new FakeSession();
+  const emitter = new EventEmitter();
+  emitter.setMaxListeners(50);
   const page = {
     gotoCalls: 0,
     goBackCalls: 0,
@@ -64,12 +77,21 @@ function fakePage(currentUrl = "https://example.com"): FakePage {
     session,
     _client: () => session,
     createCDPSession: async () => session,
+    frames: () => [],
+    on: (event: string, fn: (...args: unknown[]) => void) => emitter.on(event, fn),
+    off: (event: string, fn: (...args: unknown[]) => void) => emitter.off(event, fn),
+    emit: (event: string, ...args: unknown[]) => emitter.emit(event, ...args),
     goto: async (url: string, options?: unknown) => {
       page.gotoCalls += 1;
       page.lastGotoArgs = [url, options];
       if (page.gotoError) {
         throw page.gotoError;
       }
+      // A successful goto commits a new main-frame document.
+      session.emit("Page.frameNavigated", {
+        frame: { id: "main-1", loaderId: `L${page.gotoCalls + 1}`, url },
+        type: "Navigation",
+      });
       return {};
     },
     goBack: async () => {
@@ -77,6 +99,8 @@ function fakePage(currentUrl = "https://example.com"): FakePage {
       if (page.goBackError) {
         throw page.goBackError;
       }
+      // A successful back lands on a same-document history entry.
+      session.emit("Page.navigatedWithinDocument", { frameId: "main-1", url: page.currentUrl });
       return {};
     },
     reload: async () => {
@@ -84,6 +108,11 @@ function fakePage(currentUrl = "https://example.com"): FakePage {
       if (page.reloadError) {
         throw page.reloadError;
       }
+      // A successful reload commits a fresh document at the same URL.
+      session.emit("Page.frameNavigated", {
+        frame: { id: "main-1", loaderId: `L-r${page.reloadCalls}`, url: page.currentUrl },
+        type: "Navigation",
+      });
       return {};
     },
     url: () => page.currentUrl,
@@ -131,6 +160,7 @@ function fakeDeps(
       return {} as never;
     },
     timeoutMs: 100,
+    settleTimings: TEST_SETTLE_TIMINGS,
     ...overrides,
   };
   return { deps, browser, page, connectTabCalls: () => connectTabCalls };
@@ -336,7 +366,7 @@ describe("BrowserPage", () => {
     expect(page.page).toBeNull();
   });
 
-  test("navigate goes to an allowed destination and reports the final URL", async () => {
+  test("navigate goes to an allowed destination and reports its commit evidence", async () => {
     const { deps, page } = fakeDeps();
     const wrapper = new BrowserPage(7, "https://example.com", deps);
     await wrapper.attach();
@@ -344,7 +374,26 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.navigate("https://example.com/page2");
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/page2" });
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com/page2",
+      commitType: "commit",
+      documentEpoch: 1,
+      navigationEpoch: 1,
+      commits: [
+        {
+          kind: "main_commit",
+          frameId: "main-1",
+          parentFrameId: null,
+          oldUrl: "https://example.com",
+          newUrl: "https://example.com/page2",
+          loaderId: "L2",
+          documentEpoch: 1,
+          navigationEpoch: 1,
+        },
+      ],
+      signals: quietSignals(),
+    });
     expect(page.gotoCalls).toBe(1);
     expect(page.lastGotoArgs).toEqual(["https://example.com/page2", { timeout: 100, waitUntil: "load" }]);
   });
@@ -414,7 +463,8 @@ describe("BrowserPage", () => {
   });
 
   test("navigate rejects a redirect to an unsupported page", async () => {
-    const { deps, page } = fakeDeps();
+    const store = new SpyStore();
+    const { deps, page } = fakeDeps({ snapshotStore: store });
     const wrapper = new BrowserPage(7, "https://example.com", deps);
     await wrapper.attach();
     page.currentUrl = "chrome://newtab";
@@ -425,6 +475,9 @@ describe("BrowserPage", () => {
       ok: false,
       error: { code: "unsupported_redirect", message: "Navigation ended on an unsupported page", url: "chrome://newtab" },
     });
+    // Upfront dispatch, the observed commit through the tracker, and the
+    // redirect failure each left the tab stale.
+    expect(store.invalidatedTabs).toEqual([7, 7, 7]);
   });
 
   test("goBack navigates to the previous history entry", async () => {
@@ -435,7 +488,26 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.goBack();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com/start",
+      commitType: "same_document",
+      documentEpoch: 0,
+      navigationEpoch: 1,
+      commits: [
+        {
+          kind: "same_document",
+          frameId: "main-1",
+          parentFrameId: null,
+          oldUrl: "https://example.com",
+          newUrl: "https://example.com/start",
+          loaderId: "L1",
+          documentEpoch: 0,
+          navigationEpoch: 1,
+        },
+      ],
+      signals: quietSignals(),
+    });
     expect(page.goBackCalls).toBe(1);
   });
 
@@ -457,7 +529,26 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.reload();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com" });
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com",
+      commitType: "commit",
+      documentEpoch: 1,
+      navigationEpoch: 1,
+      commits: [
+        {
+          kind: "main_commit",
+          frameId: "main-1",
+          parentFrameId: null,
+          oldUrl: "https://example.com",
+          newUrl: "https://example.com",
+          loaderId: "L-r1",
+          documentEpoch: 1,
+          navigationEpoch: 1,
+        },
+      ],
+      signals: quietSignals(),
+    });
     expect(page.reloadCalls).toBe(1);
   });
 
@@ -477,7 +568,6 @@ describe("BrowserPage", () => {
     const wrapper = new BrowserPage(7, "https://example.com", deps);
     await wrapper.attach();
     page.currentUrl = "https://chromewebstore.google.com/detail/xyz";
-
     const result = await wrapper.reload();
 
     expect(result).toEqual({
@@ -499,8 +589,9 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.navigate("https://example.com/page2");
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/page2" });
-    expect(store.invalidatedTabs).toEqual([7]);
+    expect(result.ok).toBe(true);
+    // Once up front, then again when the tracker sees the committed document.
+    expect(store.invalidatedTabs).toEqual([7, 7]);
     expect(page.gotoCalls).toBe(1);
   });
 
@@ -539,8 +630,9 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.goBack();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/start" });
-    expect(store.invalidatedTabs).toEqual([7]);
+    expect(result.ok).toBe(true);
+    // Once up front, then again when the tracker sees the route change.
+    expect(store.invalidatedTabs).toEqual([7, 7]);
     expect(page.goBackCalls).toBe(1);
   });
 
@@ -552,8 +644,9 @@ describe("BrowserPage", () => {
 
     const result = await wrapper.reload();
 
-    expect(result).toEqual({ ok: true, url: "https://example.com" });
-    expect(store.invalidatedTabs).toEqual([7]);
+    expect(result.ok).toBe(true);
+    // Once up front, then again when the tracker sees the fresh document.
+    expect(store.invalidatedTabs).toEqual([7, 7]);
     expect(page.reloadCalls).toBe(1);
   });
 
