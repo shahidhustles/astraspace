@@ -60,6 +60,7 @@ import { scanExpectation } from "./waits/expectation";
 import { LayoutStabilityWatcher } from "./waits/layout";
 import { NavigationWatcher } from "./waits/navigation";
 import { NetworkActivityWatcher } from "./waits/network";
+import { waitForScrollSettled, type ScrollSettlement, type ScrollSurfaceProbe } from "./waits/scroll";
 import {
   resolveSettleTimings,
   type ActionSettleContext,
@@ -314,22 +315,28 @@ export class BrowserPage {
     );
   }
 
-  async scroll(input: ScrollInput): Promise<ScrollResult> {
-    return scrollGroundedTarget(input.target ?? null, input.mode, {
-      resolveTarget: (resolved) => this.resolveTarget(resolved),
-      invalidate: () => this.snapshots.invalidate(this.tabId),
-      currentUrl: () => this.puppeteerPage?.url() ?? "",
-      frame: () => this.puppeteerPage?.mainFrame() ?? null,
-    });
+  async scroll(input: ScrollInput, settle?: ActionSettleContext): Promise<ScrollResult> {
+    return this.withScrollSettlement(settle, (waitSettled) =>
+      scrollGroundedTarget(input.target ?? null, input.mode, {
+        resolveTarget: (resolved) => this.resolveTarget(resolved),
+        invalidate: () => this.snapshots.invalidate(this.tabId),
+        currentUrl: () => this.puppeteerPage?.url() ?? "",
+        frame: () => this.puppeteerPage?.mainFrame() ?? null,
+        settle: waitSettled,
+      }),
+    );
   }
 
-  async scrollToText(text: string, occurrence: number): Promise<ScrollResult> {
-    return scrollToVisibleText(text, occurrence, {
-      resolveTarget: (resolved) => this.resolveTarget(resolved),
-      invalidate: () => this.snapshots.invalidate(this.tabId),
-      currentUrl: () => this.puppeteerPage?.url() ?? "",
-      frame: () => this.puppeteerPage?.mainFrame() ?? null,
-    });
+  async scrollToText(text: string, occurrence: number, settle?: ActionSettleContext): Promise<ScrollResult> {
+    return this.withScrollSettlement(settle, (waitSettled) =>
+      scrollToVisibleText(text, occurrence, {
+        resolveTarget: (resolved) => this.resolveTarget(resolved),
+        invalidate: () => this.snapshots.invalidate(this.tabId),
+        currentUrl: () => this.puppeteerPage?.url() ?? "",
+        frame: () => this.puppeteerPage?.mainFrame() ?? null,
+        settle: waitSettled,
+      }),
+    );
   }
 
   async getSelectOptions(target: GroundedTarget): Promise<GetSelectOptionsResult> {
@@ -371,31 +378,98 @@ export class BrowserPage {
       return run(undefined);
     }
     const timings = resolveSettleTimings(this.deps.settleTimings);
-    const page = this.puppeteerPage;
-    const network = NetworkActivityWatcher.arm(page, timings);
-    const dom = await DomActivityWatcher.arm(page, timings);
+    const pair = await this.armQuietPair(timings);
     let consumed = false;
     const waitForSignals = async (): Promise<ActionSettleSignals> => {
       consumed = true;
-      try {
-        const [networkSignal, domSignal] = await Promise.all([
-          network.waitForQuiet(settle.timeoutMs, settle.signal),
-          dom.waitForQuiet(settle.timeoutMs, settle.signal),
-        ]);
-        return { network: networkSignal, dom: domSignal };
-      } finally {
-        dom.dispose();
-        network.dispose();
-      }
+      return pair.collect(settle.timeoutMs, settle.signal);
     };
     try {
       return await run(waitForSignals);
     } finally {
       if (!consumed) {
-        dom.dispose();
-        network.dispose();
+        pair.disposeOnce();
       }
     }
+  }
+
+  // Same watcher pair as withSettlement, but the quiet reading starts inside
+  // the scroll barrier so position sampling and lazy-loaded content settle
+  // together under one budget.
+  private async withScrollSettlement(
+    settle: ActionSettleContext | undefined,
+    run: (
+      waitSettled:
+        | ((request: { probe: ScrollSurfaceProbe; targetY: number }) => Promise<ScrollSettlement>)
+        | undefined,
+    ) => Promise<ScrollResult>,
+  ): Promise<ScrollResult> {
+    if (!settle || !this.attached || !this.puppeteerPage) {
+      return run(undefined);
+    }
+    const timings = resolveSettleTimings(this.deps.settleTimings);
+    const pair = await this.armQuietPair(timings);
+    const capMs = settle.timeoutMs ?? this.deps.timeoutMs;
+    let consumed = false;
+    const waitSettled = ({ probe, targetY }: { probe: ScrollSurfaceProbe; targetY: number }): Promise<ScrollSettlement> => {
+      consumed = true;
+      return waitForScrollSettled({
+        probe,
+        targetY,
+        timings,
+        timeoutMs: capMs,
+        signal: settle.signal,
+        waitForQuiet: () => pair.collect(capMs, settle.signal),
+      });
+    };
+    try {
+      return await run(waitSettled);
+    } finally {
+      if (!consumed) {
+        pair.disposeOnce();
+      }
+    }
+  }
+
+  // Arms one network and one DOM watcher per action. collect() awaits both
+  // quiet readings and disposes them; disposeOnce covers paths that never
+  // reached collection.
+  private async armQuietPair(timings: SettleTimings): Promise<{
+    collect: (timeoutMs: number | null, signal?: AbortSignal) => Promise<ActionSettleSignals>;
+    disposeOnce: () => void;
+  }> {
+    const page = this.puppeteerPage as Page;
+    const network = NetworkActivityWatcher.arm(page, timings);
+    const dom = await DomActivityWatcher.arm(page, timings);
+    let disposed = false;
+    const disposeOnce = (): void => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      // Watcher disposal can race a closing transport; teardown must never
+      // mask the action's own result.
+      try {
+        dom.dispose();
+        network.dispose();
+      } catch {
+        // ignore
+      }
+    };
+    return {
+      collect: async (timeoutMs, signal) => {
+        try {
+          const [networkSignal, domSignal] = await Promise.all([
+            network.waitForQuiet(timeoutMs, signal),
+            dom.waitForQuiet(timeoutMs, signal),
+          ]);
+          return { network: networkSignal, dom: domSignal };
+        } finally {
+          disposeOnce();
+        }
+      },
+      disposeOnce,
+    };
   }
 
   private async performObservation(): Promise<ObserveResult> {

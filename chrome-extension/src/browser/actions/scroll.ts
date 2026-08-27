@@ -4,6 +4,12 @@ import type {
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { PathStep } from "../observation/types";
 import type { GroundedTarget, TargetResolutionResult } from "../types";
+import {
+  anchorProbe,
+  documentProbe,
+  type ScrollSettlement,
+  type ScrollSurfaceProbe,
+} from "../waits/scroll";
 import type { BrowserScrollMode, ScrollPosition, ScrollResult } from "./types";
 
 export interface ScrollDeps {
@@ -11,6 +17,18 @@ export interface ScrollDeps {
   invalidate: () => void;
   currentUrl: () => string;
   frame: () => Frame | null;
+  // Runs after a successful scroll with the position the surface was asked to
+  // reach and a probe captured before the snapshot invalidated. Resolves null
+  // when no settlement was armed.
+  settle?: (input: { probe: ScrollSurfaceProbe; targetY: number }) => Promise<ScrollSettlement | null>;
+}
+
+async function settleScroll(
+  deps: ScrollDeps,
+  probe: ScrollSurfaceProbe,
+  targetY: number,
+): Promise<ScrollSettlement | undefined> {
+  return (await deps.settle?.({ probe, targetY })) ?? undefined;
 }
 
 export async function scrollGroundedTarget(
@@ -31,13 +49,15 @@ export async function scrollGroundedTarget(
     if (!container) {
       return { ok: false, error: { code: "action_failed", message: "Target has no scrollable ancestor" } };
     }
+    const targetY = scrollTargetY(mode, container.scrollTop, container.maxY, container.clientHeight);
+    const probe = anchorProbe(element);
     deps.invalidate();
-    const y = scrollTargetY(mode, container.scrollTop, container.maxY, container.clientHeight);
-    const position = await element.evaluate(applyContainerScroll, y);
+    const position = await element.evaluate(applyContainerScroll, targetY);
     if (!position) {
       return { ok: false, error: { code: "action_failed", message: "The scroll container disappeared" } };
     }
-    return { ok: true, url: deps.currentUrl(), position };
+    const measurement = await settleScroll(deps, probe, targetY);
+    return { ok: true, url: deps.currentUrl(), position, ...(measurement ? { measurement } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {
@@ -60,9 +80,11 @@ export async function scrollToVisibleText(
   }
   const element = match.element;
   try {
+    const probe = anchorProbe(element);
     deps.invalidate();
     const position = await element.evaluate(scrollElementIntoView);
-    return { ok: true, url: deps.currentUrl(), position };
+    const measurement = await settleScroll(deps, probe, position.y);
+    return { ok: true, url: deps.currentUrl(), position, ...(measurement ? { measurement } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {
@@ -77,10 +99,12 @@ async function scrollDocument(mode: BrowserScrollMode, deps: ScrollDeps): Promis
   }
   try {
     const viewport = await frame.evaluate(measureDocumentScroll);
+    const targetY = scrollTargetY(mode, viewport.scrollTop, viewport.maxY, viewport.clientHeight);
+    const probe = documentProbe(frame);
     deps.invalidate();
-    const y = scrollTargetY(mode, viewport.scrollTop, viewport.maxY, viewport.clientHeight);
-    const position = await frame.evaluate(applyDocumentScroll, y);
-    return { ok: true, url: deps.currentUrl(), position };
+    const position = await frame.evaluate(applyDocumentScroll, targetY);
+    const measurement = await settleScroll(deps, probe, targetY);
+    return { ok: true, url: deps.currentUrl(), position, ...(measurement ? { measurement } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   }

@@ -127,6 +127,28 @@ export type ExpectationSignal =
   | { status: "unresolved"; intent: "appear" | "disappear"; timeoutMs: number }
   | { status: "cancelled" };
 
+// Scroll wait evidence. "stable" needs the requested position held within
+// tolerance across two samples one span apart. A surface that vanished reads
+// as unreachable; a position that never reached, or reached but kept moving,
+// unsettles when the budget ends.
+export type ScrollStabilitySignal =
+  | { status: "stable"; samples: number; maxDeltaPx: number }
+  | {
+      status: "unsettled";
+      reason: "unreachable" | "unstable";
+      timeoutMs: number;
+      sampleCount: number;
+      maxDeltaPx: number;
+      targetY: number;
+      lastY: number | null;
+    }
+  | { status: "cancelled" };
+
+export interface ScrollMeasurement {
+  stability?: ScrollStabilitySignal;
+  signals?: ActionSettleSignals;
+}
+
 // Tab opened by the click, matched to the source through openerTabId. The ID
 // is a number|null, so JSON round-trips stay safe.
 export interface PopupEvidence {

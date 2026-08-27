@@ -377,7 +377,7 @@ export class BrowserContext {
     return page.keypress(input, settle);
   }
 
-  async scroll(input: ScrollInput): Promise<ScrollResult> {
+  async scroll(input: ScrollInput, settle?: ActionSettleContext): Promise<ScrollResult> {
     if (input.target) {
       const page = this.pages.get(input.target.tabId);
       if (!page) {
@@ -386,21 +386,21 @@ export class BrowserContext {
           error: { code: "stale_ref", message: "No page connection for this tab", target: input.target },
         };
       }
-      return page.scroll(input);
+      return page.scroll(input, settle);
     }
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.scroll(input);
+    return page.scroll(input, settle);
   }
 
-  async scrollToText(text: string, occurrence: number): Promise<ScrollResult> {
+  async scrollToText(text: string, occurrence: number, settle?: ActionSettleContext): Promise<ScrollResult> {
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.scrollToText(text, occurrence);
+    return page.scrollToText(text, occurrence, settle);
   }
 
   async getSelectOptions(target: GroundedTarget): Promise<GetSelectOptionsResult> {

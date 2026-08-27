@@ -27,8 +27,8 @@ export interface BrowserActionRuntime {
   type: (target: GroundedTarget, text: string, settle?: ActionSettleContext) => Promise<TypeResult>;
   clearInput: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClearInputResult>;
   keypress: (input: KeypressInput, settle?: ActionSettleContext) => Promise<KeypressResult>;
-  scroll: (input: ScrollInput) => Promise<ScrollResult>;
-  scrollToText: (text: string, occurrence: number) => Promise<ScrollResult>;
+  scroll: (input: ScrollInput, settle?: ActionSettleContext) => Promise<ScrollResult>;
+  scrollToText: (text: string, occurrence: number, settle?: ActionSettleContext) => Promise<ScrollResult>;
   getSelectOptions: (target: GroundedTarget) => Promise<GetSelectOptionsResult>;
   selectOption: (
     target: GroundedTarget,
@@ -93,9 +93,9 @@ export async function dispatchBrowserAction(
       case "browser_keypress":
         return await keypressAction(request.input, runtime, settle);
       case "browser_scroll":
-        return await scrollAction(request.input, runtime);
+        return await scrollAction(request.input, runtime, settle);
       case "browser_scroll_to_text":
-        return await scrollToTextAction(request.input, runtime);
+        return await scrollToTextAction(request.input, runtime, settle);
       case "browser_get_select_options":
         return await selectOptionsAction(request.input, runtime);
       case "browser_select_option":
@@ -219,7 +219,11 @@ async function keypressAction(
   };
 }
 
-async function scrollAction(input: ScrollInput, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
+async function scrollAction(
+  input: ScrollInput,
+  runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
+): Promise<BrowserActionResult> {
   const tabId = input.target?.tabId ?? runtime.selectedTabId;
   if (tabId === null) {
     return {
@@ -229,23 +233,14 @@ async function scrollAction(input: ScrollInput, runtime: BrowserActionRuntime): 
       error: { code: "selected_tab_unavailable", message: "No selected live connection" },
     };
   }
-  const result = await runtime.scroll(input);
-  if (!result.ok) {
-    return { ok: false, action: "browser_scroll", tabId, error: result.error };
-  }
-  return {
-    ok: true,
-    action: "browser_scroll",
-    tabId,
-    url: result.url,
-    snapshotInvalidated: true,
-    data: { kind: "scroll", x: result.position.x, y: result.position.y },
-  };
+  const result = await runtime.scroll(input, settle);
+  return scrollEnvelope("browser_scroll", tabId, result, "scroll");
 }
 
 async function scrollToTextAction(
   input: { text: string; occurrence: number },
   runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
 ): Promise<BrowserActionResult> {
   const tabId = runtime.selectedTabId;
   if (tabId === null) {
@@ -256,17 +251,35 @@ async function scrollToTextAction(
       error: { code: "selected_tab_unavailable", message: "No selected live connection" },
     };
   }
-  const result = await runtime.scrollToText(input.text, input.occurrence);
+  const result = await runtime.scrollToText(input.text, input.occurrence, settle);
+  return scrollEnvelope("browser_scroll_to_text", tabId, result, "scroll_to_text");
+}
+
+// Shared success mapping for both scroll actions: settle signals ride the
+// envelope and stability evidence lands in data.measured, mirroring clicks.
+function scrollEnvelope(
+  action: "browser_scroll" | "browser_scroll_to_text",
+  tabId: number,
+  result: ScrollResult,
+  kind: "scroll" | "scroll_to_text",
+): BrowserActionResult {
   if (!result.ok) {
-    return { ok: false, action: "browser_scroll_to_text", tabId: runtime.selectedTabId, error: result.error };
+    return { ok: false, action, tabId, error: result.error };
   }
+  const measured = result.measurement;
   return {
     ok: true,
-    action: "browser_scroll_to_text",
+    action,
     tabId,
     url: result.url,
     snapshotInvalidated: true,
-    data: { kind: "scroll_to_text", x: result.position.x, y: result.position.y },
+    ...(measured?.signals ? { signals: measured.signals } : {}),
+    data: {
+      kind,
+      x: result.position.x,
+      y: result.position.y,
+      ...(measured && Object.keys(measured).length > 0 ? { measured } : {}),
+    },
   };
 }
 

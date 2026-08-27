@@ -4,6 +4,7 @@ import type {
   ExpectationSignal,
   LayoutSignal,
   NavigationCommitRecord,
+  ScrollMeasurement,
 } from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
@@ -124,8 +125,8 @@ export type BrowserActionData =
   | { kind: "type" }
   | { kind: "clear_input" }
   | { kind: "keypress" }
-  | { kind: "scroll"; x: number; y: number }
-  | { kind: "scroll_to_text"; x: number; y: number }
+  | { kind: "scroll"; x: number; y: number; measured?: ScrollMeasurement }
+  | { kind: "scroll_to_text"; x: number; y: number; measured?: ScrollMeasurement }
   | { kind: "get_select_options"; options: SelectOption[]; optionsTruncated: boolean }
   | { kind: "select_option"; selectedIndex: number }
   | { kind: "open_tab"; tabs: TabInfo[] | null }
@@ -282,7 +283,7 @@ export interface ScrollPosition {
 }
 
 export type ScrollResult =
-  | { ok: true; url: string; position: ScrollPosition }
+  | { ok: true; url: string; position: ScrollPosition; measurement?: ScrollMeasurement }
   | { ok: false; error: BrowserActionError };
 
 export type GetSelectOptionsResult =

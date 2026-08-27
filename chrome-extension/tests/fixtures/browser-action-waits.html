@@ -26,6 +26,18 @@
         min-height: 40px;
         white-space: pre-line;
       }
+      #doc-spacer {
+        height: 1800px;
+      }
+      #scroll-box {
+        height: 240px;
+        overflow-y: auto;
+        border: 1px solid #ccc;
+      }
+      .row {
+        padding: 6px 10px;
+        border-bottom: 1px solid #eee;
+      }
     </style>
   </head>
   <body>
@@ -63,6 +75,12 @@
     <button id="route-click" type="button">Route click</button>
     <div id="toast-host"></div>
     <iframe id="expect-frame" src="/child.html"></iframe>
+
+    <h2>Scroller</h2>
+    <div id="scroll-box" aria-label="Scroll box">
+      <div class="row"><button id="box-anchor" type="button" aria-label="Box anchor">Box anchor</button></div>
+    </div>
+    <div id="doc-spacer"></div>
 
     <div id="log"></div>
 
@@ -234,6 +252,87 @@
       document.getElementById("spawn-iframe").addEventListener("click", function () {
         window.__setChildSrc("/child.html");
       });
+
+      // Scroll scenarios stay inert until a test scrolls the box: the lazy
+      // loader only fires once its sentinel nears the container bottom.
+      var ROW_HEIGHT = 30;
+      var INITIAL_ROWS = 80;
+      var MAX_ROWS = 160;
+      var MARKERS = { 60: "Deep scroll marker one", 68: "Deep scroll marker two", 76: "Deep scroll marker three" };
+      var rowBudget = INITIAL_ROWS;
+
+      function appendRows(host, count) {
+        for (var i = 0; i < count && rowBudget < MAX_ROWS; i++) {
+          var row = document.createElement("div");
+          row.className = "row";
+          var marker = MARKERS[rowBudget % 80];
+          row.textContent = marker ? marker : "Row " + rowBudget + " filler";
+          row.setAttribute("data-created", String(Date.now()));
+          host.appendChild(row);
+          rowBudget++;
+        }
+        return i;
+      }
+
+      window.__lastLazyInsertAt = 0;
+      var box = document.getElementById("scroll-box");
+      var initialCount = appendRows(box, INITIAL_ROWS);
+      var sentinel = document.createElement("div");
+      sentinel.id = "lazy-sentinel";
+      box.appendChild(sentinel);
+
+      var observer = new IntersectionObserver(function (entries) {
+        if (!entries.some(function (entry) { return entry.isIntersecting; })) {
+          return;
+        }
+        setTimeout(function () {
+          if (rowBudget >= MAX_ROWS) {
+            return;
+          }
+          window.__lastLazyInsertAt = Date.now();
+          appendRows(box, 20);
+        }, 150);
+      }, { root: box, rootMargin: "80px" });
+
+      observer.observe(sentinel);
+
+      // Test drivers. Fresh navigations reset whatever these leave behind.
+      // Arming before a scroll makes the container vanish on the first
+      // scroll event, so settlement probes run into a removed surface.
+      window.__removeScrollBox = function () {
+        var box = document.getElementById("scroll-box");
+        if (!box || box.__removeArmed) { return; }
+        box.__removeArmed = true;
+        box.addEventListener("scroll", function () {
+          requestAnimationFrame(function () {
+            var target = document.getElementById("scroll-box");
+            if (target) { target.remove(); }
+          });
+        }, { once: true });
+      };
+
+      window.__lockScrollTo = function (top) {
+        window.__releaseScrollLock();
+        window.__lockTimer = setInterval(function () {
+          var box = document.getElementById("scroll-box");
+          if (box) { box.scrollTop = top; }
+        }, 120);
+      };
+
+      window.__releaseScrollLock = function () {
+        if (window.__lockTimer) { clearInterval(window.__lockTimer); window.__lockTimer = null; }
+      };
+
+      // Fires a lazy burst shortly after the scroll barrier starts sampling,
+      // so tests can assert the quiet window covered the insertion.
+      window.__queueLazyBurst = function () {
+        setTimeout(function () {
+          var box = document.getElementById("scroll-box");
+          if (!box || rowBudget >= MAX_ROWS) { return; }
+          window.__lastLazyInsertAt = Date.now();
+          appendRows(box, 20);
+        }, 60);
+      };
     </script>
   </body>
 </html>
