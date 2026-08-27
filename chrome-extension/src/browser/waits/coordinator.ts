@@ -162,8 +162,11 @@ export class TabActionCoordinator {
   // Settles every queued and active action on one tab because its connection
   // is gone (tab closed, debugger detached, generation replaced). Queued
   // entries never run afterward.
-  abortForTab(tabId: number, cause: ActionAbortCause): void {
-    this.abortEntries([...this.live.values()].filter((entry) => entry.tabId === tabId), cause);
+  abortForTab(tabId: number, cause: ActionAbortCause, exceptActionId?: ActionId): void {
+    this.abortEntries(
+      [...this.live.values()].filter((entry) => entry.tabId === tabId && entry.id !== exceptActionId),
+      cause,
+    );
   }
 
   abortAll(cause: ActionAbortCause): void {
@@ -176,8 +179,6 @@ export class TabActionCoordinator {
       this.retire(entry);
       if (wasQueued) {
         this.removeQueued(entry);
-      } else {
-        entry.controller.abort();
       }
       entry.resolveSettled({
         ok: false,
@@ -190,6 +191,9 @@ export class TabActionCoordinator {
           elapsedMs: Date.now() - entry.acceptedAt,
         },
       });
+      if (!wasQueued) {
+        entry.controller.abort();
+      }
     }
   }
 

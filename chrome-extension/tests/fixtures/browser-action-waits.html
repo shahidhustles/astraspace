@@ -73,6 +73,10 @@
     <ul id="dom-list"></ul>
     <button id="nav-click" type="button">Nav click</button>
     <button id="route-click" type="button">Route click</button>
+    <button id="open-popup" type="button">Open popup</button>
+    <button id="toast-click" type="button">Toast click</button>
+    <button id="end-import" type="button">End import</button>
+    <div id="import-pill" role="status">Import running</div>
     <div id="toast-host"></div>
     <iframe id="expect-frame" src="/child.html"></iframe>
 
@@ -251,6 +255,19 @@
       document.getElementById("deferred-nav").addEventListener("click", function () { window.__deferredNavigate(); });
       document.getElementById("spawn-iframe").addEventListener("click", function () {
         window.__setChildSrc("/child.html");
+      });
+
+      document.getElementById("open-popup").addEventListener("click", function () {
+        window.open("/child.html?popped=1", "astra-popup", "width=420,height=320");
+      });
+      document.getElementById("toast-click").addEventListener("click", function () {
+        armToast(250, document.getElementById("toast-host"));
+      });
+      document.getElementById("end-import").addEventListener("click", function () {
+        setTimeout(function () {
+          var pill = document.getElementById("import-pill");
+          if (pill && pill.parentNode) { pill.parentNode.removeChild(pill); }
+        }, 150);
       });
 
       // Scroll scenarios stay inert until a test scrolls the box: the lazy

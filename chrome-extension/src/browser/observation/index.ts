@@ -24,6 +24,7 @@ import {
   isSensitiveControl,
   locatorSegments,
   measureViewport,
+  ownerPathKey,
   rectOf,
   sensitiveName,
   SHADOW_ROOT_NODE,
@@ -100,6 +101,7 @@ const EXTRACT_PREAMBLE = [
   sensitiveName.toString(),
   collectAttrs.toString(),
   measureViewport.toString(),
+  ownerPathKey.toString(),
 ].join("\n");
 
 const OVERLAY_PREAMBLE = [

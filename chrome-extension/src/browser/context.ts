@@ -77,6 +77,7 @@ export class BrowserContext {
   private readonly pages = new Map<number, BrowserPage>();
   private readonly pending = new Map<number, Promise<AttachResult>>();
   private readonly actionCoordinator = new TabActionCoordinator();
+  private readonly expectedClosures = new Map<number, ActionId>();
   private readonly deps: ContextDeps;
   private readonly stopListeners: (() => void)[] = [];
   private selectedTab: number | null = null;
@@ -464,42 +465,51 @@ export class BrowserContext {
       return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
     }
 
-    const check = await this.confirmRemoval(tabId, settle);
-    switch (check.kind) {
-      case "missing_tab":
-        return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
-      case "chrome_error":
-        return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
-      case "timeout":
-        // removeTab was already dispatched; Chrome just never answered.
-        // That is uncertainty about a dispatched mutation, not a queue
-        // expiry, so it reports lifecycle_timeout instead of
-        // action_wait_timeout. Local state stays until removal is proven.
-        return {
-          ok: false,
-          error: { code: "lifecycle_timeout", message: "Close did not finish before the deadline" },
-        };
-      case "cancelled":
-        return {
-          ok: false,
-          error: { code: "action_cancelled", message: "Browser action was cancelled during dispatch", dispatchStarted: true },
-        };
-      case "removed":
-        break;
+    if (settle?.actionId) {
+      this.expectedClosures.set(tabId, settle.actionId);
     }
+    try {
+      const check = await this.confirmRemoval(tabId, settle);
+      switch (check.kind) {
+        case "missing_tab":
+          return { ok: false, error: { code: "missing_tab", message: "No such tab" } };
+        case "chrome_error":
+          return { ok: false, error: { code: "chrome_api_error", message: "Could not close tab" } };
+        case "timeout":
+          // removeTab was already dispatched; Chrome just never answered.
+          // That is uncertainty about a dispatched mutation, not a queue
+          // expiry, so it reports lifecycle_timeout instead of
+          // action_wait_timeout. Local state stays until removal is proven.
+          return {
+            ok: false,
+            error: { code: "lifecycle_timeout", message: "Close did not finish before the deadline" },
+          };
+        case "cancelled":
+          return {
+            ok: false,
+            error: { code: "action_cancelled", message: "Browser action was cancelled during dispatch", dispatchStarted: true },
+          };
+        case "removed":
+          break;
+      }
 
-    // Chrome confirmed the removal, so local connection state may be
-    // discarded. Clearing the registry first keeps any late removal event a
-    // no-op instead of a second teardown.
-    const managed = this.pages.get(tabId);
-    this.removeTabRecord(tabId);
-    if (managed) {
-      const disconnected = await managed.disconnect();
-      if (!disconnected.ok) {
-        return { ok: false, error: disconnected.error };
+      // Chrome confirmed the removal, so local connection state may be
+      // discarded. Clearing the registry first keeps any late removal event a
+      // no-op instead of a second teardown.
+      const managed = this.pages.get(tabId);
+      this.removeTabRecord(tabId);
+      if (managed) {
+        const disconnected = await managed.disconnect();
+        if (!disconnected.ok) {
+          return { ok: false, error: disconnected.error };
+        }
+      }
+      return { ok: true, tabId, measured: this.lifecycleEvidence("removal_confirmed", startedAt, settle) };
+    } finally {
+      if (this.expectedClosures.get(tabId) === settle?.actionId) {
+        this.expectedClosures.delete(tabId);
       }
     }
-    return { ok: true, tabId, measured: this.lifecycleEvidence("removal_confirmed", startedAt, settle) };
   }
 
   private lifecycleEvidence(
@@ -598,6 +608,7 @@ export class BrowserContext {
     }
     this.pages.clear();
     this.pending.clear();
+    this.expectedClosures.clear();
     this.selectedTab = null;
     return { failures };
   }
@@ -606,13 +617,16 @@ export class BrowserContext {
     this.discardPage(tabId);
     // Any action still queued or dispatching against the closed tab must end
     // now, with the lifecycle cause that ended it.
-    this.actionCoordinator.abortForTab(tabId, "tab_removed");
+    this.actionCoordinator.abortForTab(tabId, "tab_removed", this.expectedClosures.get(tabId));
   }
 
   private handleDebuggerDetach(source: chrome.debugger.Debuggee): void {
     if (source.tabId !== undefined) {
+      const wasManaged = this.pages.has(source.tabId);
       this.discardPage(source.tabId);
-      this.actionCoordinator.abortForTab(source.tabId, "debugger_detached");
+      if (wasManaged) {
+        this.actionCoordinator.abortForTab(source.tabId, "debugger_detached");
+      }
     }
   }
 
@@ -668,7 +682,11 @@ export class BrowserContext {
       onConnectionReplaced: (replacedTabId) => {
         base.onConnectionReplaced?.(replacedTabId);
         if (replacedTabId === tabId) {
-          this.actionCoordinator.abortForTab(replacedTabId, "connection_replaced");
+          this.actionCoordinator.abortForTab(
+            replacedTabId,
+            "connection_replaced",
+            this.expectedClosures.get(replacedTabId),
+          );
         }
       },
     };

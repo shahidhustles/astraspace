@@ -1,4 +1,4 @@
-import type { HTTPRequest, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
+import type { Frame, HTTPRequest, Page } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { NetworkSignal, SettleTimings } from "./types";
 
 // Resource kinds whose whole lifecycle must settle before an action reports
@@ -42,12 +42,33 @@ export class NetworkActivityWatcher {
     this.lastActivityAt = Date.now();
   };
 
+  private readonly onFrameNavigated = (frame: Frame): void => {
+    if (this.disposed) {
+      return;
+    }
+    const mainFrameCommitted = frame.parentFrame() === null;
+    let changed = false;
+    for (const request of this.tracked) {
+      if (
+        request.resourceType() === "document" &&
+        (mainFrameCommitted || request.frame() === frame)
+      ) {
+        this.tracked.delete(request);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.lastActivityAt = Date.now();
+    }
+  };
+
   private constructor(page: Page, timings: SettleTimings) {
     this.page = page;
     this.timings = timings;
     this.page.on("request", this.onRequest);
     this.page.on("requestfinished", this.onSettled);
     this.page.on("requestfailed", this.onSettled);
+    this.page.on("framenavigated", this.onFrameNavigated);
   }
 
   // Resolves once no tracked request has started or settled for
@@ -57,7 +78,7 @@ export class NetworkActivityWatcher {
       timeoutMs === null ? Number.POSITIVE_INFINITY : Date.now() + timeoutMs;
     for (;;) {
       const idleMs = Date.now() - this.lastActivityAt;
-      if (idleMs >= this.timings.networkQuietMs) {
+      if (this.tracked.size === 0 && idleMs >= this.timings.networkQuietMs) {
         return { status: "quiet", idleMs, ignoredRequests: this.ignoredRequests };
       }
       if (signal?.aborted) {
@@ -83,6 +104,7 @@ export class NetworkActivityWatcher {
     this.page.off("request", this.onRequest);
     this.page.off("requestfinished", this.onSettled);
     this.page.off("requestfailed", this.onSettled);
+    this.page.off("framenavigated", this.onFrameNavigated);
     this.tracked.clear();
   }
 }

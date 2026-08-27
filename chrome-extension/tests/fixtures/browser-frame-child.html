@@ -8,6 +8,7 @@
         font-family: sans-serif;
         margin: 0;
         padding: 8px;
+        position: relative;
       }
       p {
         margin: 0 0 6px;
@@ -16,6 +17,17 @@
       #grandchild-frame {
         border: 0;
         margin-top: 6px;
+      }
+      #child-removable,
+      #child-next {
+        position: absolute;
+        right: 8px;
+      }
+      #child-removable {
+        top: 8px;
+      }
+      #child-next {
+        top: 32px;
       }
     </style>
   </head>
@@ -30,6 +42,8 @@
       <option value="child-two">Child Two</option>
       <option value="child-disabled" disabled>Child Disabled</option>
     </select>
+    <div id="child-removable" role="status" aria-label="Frame status">Frame status</div>
+    <a id="child-next" href="?v=2" type="button">Next child version</a>
     <div id="child-nested"></div>
     <script>
       const params = new URLSearchParams(location.search);

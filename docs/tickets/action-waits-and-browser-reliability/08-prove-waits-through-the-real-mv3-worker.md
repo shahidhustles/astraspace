@@ -19,6 +19,7 @@ Modify:
 - Exercise the built background service worker through `chrome.runtime.sendMessage`. Do not bypass it with a direct helper or `BrowserContext` call.
 - Use local fixture routes for immediate navigation, same-document routing, delayed and failed fetches, a permanent WebSocket, DOM-only updates, nested frame navigation, popup creation, lazy scroll content, and an unsupported redirect.
 - Assert watcher-before-dispatch evidence, final URLs, request counts, quiet durations, snapshot invalidation, cancellation, timeout, and cleanup. Do not use a fixed delay as action completion evidence.
+- Detach-mid-action needs more than the unit-level dead-transport simulation from 07 (`detachIfDisconnected` driven by a fake `browser.connected` flip): kill a real debugger session through Chrome while a fixture action is mid-barrier and prove the wait ends with its lifecycle cause, refs stay stale, and nothing replays.
 - Require Chrome or `PUPPETEER_EXECUTABLE_PATH`. A skipped browser test does not pass this ticket.
 - Keep test-only host permissions and smoke scripts in the temporary copied extension. Do not expand the shipped manifest.
 

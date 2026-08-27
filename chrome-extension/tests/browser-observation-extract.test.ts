@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { extractFrameContent, extractPageContent } from "../src/browser/observation/extract";
+import { extractFrameContent, extractPageContent, ownerPathKey } from "../src/browser/observation/extract";
 import type {
   ExtractedElement,
   ExtractedNode,
@@ -403,7 +403,7 @@ describe("extractPageContent", () => {
     expect(unbound.root.children.some((node) => node.kind === "frame" && node.frameId === null)).toBe(true);
     expect(JSON.stringify(unbound)).not.toContain('"iframe"');
 
-    const bound = extractPageContent(win, 1, { [JSON.stringify(placeholderFramePath(win))]: "frame-1" });
+    const bound = extractPageContent(win, 1, { [ownerPathKey(placeholderFramePath(win))]: "frame-1" });
     const frame = bound.root.children.find((node) => node.kind === "frame");
     expect(frame?.kind).toBe("frame");
     if (frame?.kind !== "frame") return;
@@ -412,8 +412,28 @@ describe("extractPageContent", () => {
     const iframe = win.document.getElementById("frame");
     if (!iframe) throw new Error("frame fixture missing");
     iframe.setAttribute("hidden", "");
-    const hidden = extractPageContent(win, 1, { [JSON.stringify(placeholderFramePath(win))]: "frame-1" });
+    const hidden = extractPageContent(win, 1, { [ownerPathKey(placeholderFramePath(win))]: "frame-1" });
     expect(hidden.root.children.some((node) => node.kind === "frame")).toBe(false);
+  });
+
+  test("binds frame owners regardless of path-step property order", () => {
+    const win = fixtureWindow();
+    setScroll(win, 0, 0);
+    const reorderedPath = placeholderFramePath(win).map((step) =>
+      step.kind === "shadow"
+        ? { kind: "shadow" as const }
+        : { index: step.index, kind: "child" as const },
+    );
+
+    const content = extractPageContent(win, 1, {
+      [ownerPathKey(reorderedPath)]: "frame-1",
+    });
+    const frame = content.root.children.find((node) => node.kind === "frame");
+
+    expect(frame?.kind).toBe("frame");
+    if (frame?.kind === "frame") {
+      expect(frame.frameId).toBe("frame-1");
+    }
   });
 
   test("traverses open shadow roots and keeps closed shadow content opaque", () => {

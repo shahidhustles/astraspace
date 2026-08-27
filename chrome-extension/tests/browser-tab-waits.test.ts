@@ -73,6 +73,7 @@ function fakeBrowser(page: FakePage): FakeBrowser {
 interface Controls {
   removal: "resolve" | "reject-busy" | "hang";
   removeCalls: number[];
+  emitRemovalDuringCall: boolean;
   activateImmediately: boolean;
   releaseHang: () => void;
 }
@@ -119,6 +120,7 @@ function setup(): Harness {
   const controls: Controls = {
     removal: "resolve",
     removeCalls: [],
+    emitRemovalDuringCall: false,
     activateImmediately: false,
     releaseHang: () => hangingResolve?.(),
   };
@@ -169,6 +171,14 @@ function setup(): Harness {
       }) as chrome.tabs.Tab,
     removeTab: async (tabId: number) => {
       controls.removeCalls.push(tabId);
+      if (controls.emitRemovalDuringCall) {
+        for (const listener of removedListeners) {
+          listener(tabId, { windowId: 1, isWindowClosing: false });
+        }
+        for (const listener of detachedListeners) {
+          listener({ tabId }, "target_closed");
+        }
+      }
       if (controls.removal === "hang") {
         await new Promise<void>((resolve) => {
           hangingResolve = resolve;
@@ -421,6 +431,27 @@ describe("switch tab lifecycle", () => {
 });
 
 describe("close tab lifecycle", () => {
+  test("the removal event does not cancel the close action that caused it", async () => {
+    const h = setup();
+    await h.context.useActiveTab();
+    const victimId = await h.openAndSelect("https://secondary.example");
+    h.controls.emitRemovalDuringCall = true;
+
+    const result = await runAction(h.context, {
+      type: BROWSER_ACTION_MESSAGE,
+      actionId: "wait-close-self-event" as ActionId,
+      wait: null,
+      action: "browser_close_tab",
+      input: { tabId: victimId },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      action: "browser_close_tab",
+      completion: { actionId: "wait-close-self-event", status: "completed" },
+    });
+  });
+
   test("confirms removal, reports evidence, and clears state exactly once", async () => {
     const h = setup();
     await h.context.useActiveTab();

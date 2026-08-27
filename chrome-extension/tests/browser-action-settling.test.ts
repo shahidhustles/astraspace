@@ -28,8 +28,8 @@ const FAST_TIMINGS: SettleTimings = { domQuietMs: 60, networkQuietMs: 80, pollMs
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-function fakeRequest(resourceType: string): HTTPRequest {
-  return { resourceType: () => resourceType } as unknown as HTTPRequest;
+function fakeRequest(resourceType: string, frame?: Frame): HTTPRequest {
+  return { resourceType: () => resourceType, frame: () => frame ?? null } as unknown as HTTPRequest;
 }
 
 function fakeNetworkPage(): EventEmitter {
@@ -99,6 +99,32 @@ describe("NetworkActivityWatcher", () => {
 
     const signal = await watcher.waitForQuiet(40);
     expect(signal).toEqual({ status: "activity_timeout", timeoutMs: 40, pendingCount: 1, ignoredRequests: 1 });
+    watcher.dispose();
+  });
+
+  test("does not report quiet while a tracked request outlives the quiet interval", async () => {
+    const page = fakeNetworkPage();
+    const watcher = NetworkActivityWatcher.arm(page as unknown as Page, FAST_TIMINGS);
+    page.emit("request", fakeRequest(resourceTypeOf("fetch")));
+
+    const signal = await watcher.waitForQuiet(140);
+
+    expect(signal).toEqual({ status: "activity_timeout", timeoutMs: 140, pendingCount: 1, ignoredRequests: 0 });
+    watcher.dispose();
+  });
+
+  test("a committed main frame retires obsolete document requests from earlier hops", async () => {
+    const page = fakeNetworkPage();
+    const oldChild = { parentFrame: () => ({}) } as unknown as Frame;
+    const mainFrame = { parentFrame: () => null } as unknown as Frame;
+    const watcher = NetworkActivityWatcher.arm(page as unknown as Page, FAST_TIMINGS);
+    page.emit("request", fakeRequest(resourceTypeOf("document"), mainFrame));
+    page.emit("request", fakeRequest(resourceTypeOf("document"), oldChild));
+
+    page.emit("framenavigated", mainFrame);
+    const signal = await watcher.waitForQuiet(500);
+
+    expect(signal.status).toBe("quiet");
     watcher.dispose();
   });
 

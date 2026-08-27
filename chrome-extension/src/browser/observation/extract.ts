@@ -76,6 +76,12 @@ export const SHADOW_ROOT_NODE = 11;
 
 export type OwnerMap = Record<string, string>;
 
+export function ownerPathKey(path: PathStep[]): string {
+  return path
+    .map((step) => (step.kind === "shadow" ? "s" : `c:${step.index}`))
+    .join("/");
+}
+
 export function extractPageContent(
   win: Window,
   startRef = 1,
@@ -197,7 +203,7 @@ export function visitElement(
   }
 
   if (tag === "iframe") {
-    return { kind: "frame", frameId: owners[JSON.stringify(domPath)] ?? null, children: [] };
+    return { kind: "frame", frameId: owners[ownerPathKey(domPath)] ?? null, children: [] };
   }
 
   const opaqueCustomElement = tag.includes("-") && el.shadowRoot === null;

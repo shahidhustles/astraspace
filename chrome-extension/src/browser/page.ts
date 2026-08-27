@@ -30,7 +30,7 @@ import {
   type ViewportCapture,
   type ViewportMeasurements,
 } from "./observation";
-import type { OwnerMap } from "./observation/extract";
+import { ownerPathKey, type OwnerMap } from "./observation/extract";
 import { SnapshotStore } from "./snapshot";
 import { resolveTarget } from "./target-resolution";
 import { enforceUrlPolicy, redirectPolicyError } from "./url-policy";
@@ -94,6 +94,7 @@ export interface PageDeps {
   // Fires when a live connection dies unexpectedly mid-use (not on teardown
   // the context itself initiated), so action scheduling can abort its waits.
   onConnectionReplaced?: (tabId: number) => void;
+  isDebuggerAttached?: (tabId: number) => Promise<boolean>;
 }
 
 export type AttachResult = { ok: true; tabId: number } | { ok: false; error: BrowserError };
@@ -169,6 +170,7 @@ export class BrowserPage {
   private puppeteerPage: Page | null = null;
   private session: CDPSession | null = null;
   private identityTracker: FrameGraphTracker | null = null;
+  private stopBrowserDisconnect: (() => void) | null = null;
   private observationQueue: Promise<void> = Promise.resolve();
   private connectionGeneration = 0;
 
@@ -218,10 +220,16 @@ export class BrowserPage {
         () => this.snapshots.invalidate(this.tabId),
         { detachOnDispose: false },
       );
-      this.browser = browser;
+      const attachedBrowser = browser;
+      this.browser = attachedBrowser;
       this.puppeteerPage = page;
       this.session = session;
       this.identityTracker = identityTracker;
+      if (typeof attachedBrowser.on === "function" && typeof attachedBrowser.off === "function") {
+        const onDisconnected = (): void => this.handleUnexpectedDisconnect(attachedBrowser);
+        attachedBrowser.on("disconnected", onDisconnected);
+        this.stopBrowserDisconnect = () => attachedBrowser.off("disconnected", onDisconnected);
+      }
       this.connectionGeneration += 1;
       return { ok: true, tabId: this.tabId };
     } catch (error) {
@@ -237,6 +245,8 @@ export class BrowserPage {
 
   async disconnect(): Promise<DisconnectResult> {
     const browser = this.browser;
+    this.stopBrowserDisconnect?.();
+    this.stopBrowserDisconnect = null;
     this.connectionGeneration += 1;
     this.browser = null;
     this.puppeteerPage = null;
@@ -448,12 +458,18 @@ export class BrowserPage {
     const page = this.puppeteerPage as Page;
     const network = NetworkActivityWatcher.arm(page, timings);
     const dom = await DomActivityWatcher.arm(page, timings);
+    let monitoring = true;
+    const monitoredBrowser = this.browser;
+    if (monitoredBrowser && this.deps.isDebuggerAttached) {
+      void this.monitorDebuggerConnection(monitoredBrowser, timings.pollMs, () => monitoring);
+    }
     let disposed = false;
     const disposeOnce = (): void => {
       if (disposed) {
         return;
       }
       disposed = true;
+      monitoring = false;
       // Watcher disposal can race a closing transport; teardown must never
       // mask the action's own result.
       try {
@@ -896,17 +912,51 @@ export class BrowserPage {
 
   private detachIfDisconnected(): void {
     if (this.browser && !this.browser.connected) {
-      this.connectionGeneration += 1;
-      this.browser = null;
-      this.puppeteerPage = null;
-      this.session = null;
-      this.identityTracker?.dispose();
-      this.identityTracker = null;
-      this.snapshots.invalidate(this.tabId);
+      this.handleUnexpectedDisconnect(this.browser);
+    }
+  }
+
+  private handleUnexpectedDisconnect(browser: Browser): void {
+    if (this.browser !== browser) {
+      return;
+    }
+    this.stopBrowserDisconnect?.();
+    this.stopBrowserDisconnect = null;
+    this.connectionGeneration += 1;
+    this.browser = null;
+    this.puppeteerPage = null;
+    this.session = null;
+    this.identityTracker?.dispose();
+    this.identityTracker = null;
+    this.snapshots.invalidate(this.tabId);
+    try {
+      this.deps.onConnectionReplaced?.(this.tabId);
+    } catch {
+      // Teardown notifications must never mask the action's own result.
+    }
+  }
+
+  private async monitorDebuggerConnection(
+    browser: Browser,
+    pollMs: number,
+    isActive: () => boolean,
+  ): Promise<void> {
+    const isDebuggerAttached = this.deps.isDebuggerAttached;
+    if (!isDebuggerAttached) {
+      return;
+    }
+    while (isActive() && this.browser === browser) {
+      await new Promise((resolve) => setTimeout(resolve, Math.max(50, pollMs)));
+      if (!isActive() || this.browser !== browser) {
+        return;
+      }
       try {
-        this.deps.onConnectionReplaced?.(this.tabId);
+        if (!(await isDebuggerAttached(this.tabId))) {
+          this.handleUnexpectedDisconnect(browser);
+          return;
+        }
       } catch {
-        // Teardown notifications must never mask the action's own result.
+        // A transient debugger query failure is not proof of detachment.
       }
     }
   }
@@ -933,7 +983,7 @@ async function extractFrameRecursive(
       if (path === null) {
         return null;
       }
-      owners[JSON.stringify(path)] = childId;
+      owners[ownerPathKey(path)] = childId;
     } catch {
       return null;
     } finally {
@@ -1223,6 +1273,8 @@ function pathOfElement(el: Element): PathStep[] | null {
 export const defaultPageDeps: PageDeps = {
   connect,
   connectTab: (tabId) => ExtensionTransport.connectTab(tabId),
+  isDebuggerAttached: async (tabId) =>
+    (await chrome.debugger.getTargets()).some((target) => target.tabId === tabId && target.attached),
   timeoutMs: DEFAULT_NAVIGATION_TIMEOUT_MS,
   onCreated: (listener) => {
     chrome.tabs.onCreated.addListener(listener);
