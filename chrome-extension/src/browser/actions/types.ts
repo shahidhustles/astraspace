@@ -1,6 +1,9 @@
+import type { ActionId } from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
 export const BROWSER_ACTION_MESSAGE = "browser.action";
+
+export const BROWSER_ACTION_CANCEL_MESSAGE = "browser.action.cancel";
 
 // Upper bound on option records returned by one browser_get_select_options call.
 // Records are always complete; identity fields are never truncated.
@@ -61,33 +64,51 @@ export interface SelectOptionIdentity {
   value: string;
 }
 
+// Request-level fields shared by every action. They live beside `input`,
+// never inside it, so action-specific inputs stay untouched.
+export interface BrowserActionEnvelope {
+  actionId: ActionId | null;
+  wait: ActionWaitPolicy | null;
+}
+
+export interface ActionExpectationPolicy {
+  intent: "appear" | "disappear";
+  role: string;
+  name: string;
+}
+
+export interface ActionWaitPolicy {
+  timeoutMs: number | null;
+  expectation: ActionExpectationPolicy | null;
+}
+
 export type BrowserActionRequest =
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_navigate"; input: { url: string } }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_back"; input: Record<string, never> }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_refresh"; input: Record<string, never> }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_click"; input: GroundedTarget }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_type"; input: { target: GroundedTarget; text: string } }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_clear_input"; input: GroundedTarget }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_keypress"; input: KeypressInput }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_scroll"; input: ScrollInput }
-  | {
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_navigate"; input: { url: string } })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_back"; input: Record<string, never> })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_refresh"; input: Record<string, never> })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_click"; input: GroundedTarget })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_type"; input: { target: GroundedTarget; text: string } })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_clear_input"; input: GroundedTarget })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_keypress"; input: KeypressInput })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_scroll"; input: ScrollInput })
+  | (BrowserActionEnvelope & {
       type: typeof BROWSER_ACTION_MESSAGE;
       action: "browser_scroll_to_text";
       input: { text: string; occurrence: number };
-    }
-  | {
+    })
+  | (BrowserActionEnvelope & {
       type: typeof BROWSER_ACTION_MESSAGE;
       action: "browser_get_select_options";
       input: GroundedTarget;
-    }
-  | {
+    })
+  | (BrowserActionEnvelope & {
       type: typeof BROWSER_ACTION_MESSAGE;
       action: "browser_select_option";
       input: { target: GroundedTarget; index: number; label: string; value: string };
-    }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_open_tab"; input: { url: string } }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_switch_tab"; input: { tabId: number } }
-  | { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_close_tab"; input: { tabId: number } };
+    })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_open_tab"; input: { url: string } })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_switch_tab"; input: { tabId: number } })
+  | (BrowserActionEnvelope & { type: typeof BROWSER_ACTION_MESSAGE; action: "browser_close_tab"; input: { tabId: number } });
 
 export type BrowserActionData =
   | { kind: "navigate" }
@@ -166,10 +187,28 @@ export interface GroundedTargetError {
   target: GroundedTarget;
 }
 
+export interface ActionCancelledError {
+  code: "action_cancelled";
+  message: string;
+  dispatchStarted: boolean;
+}
+
+export interface ActionWaitTimeoutError {
+  code: "action_wait_timeout";
+  message: string;
+}
+
+export interface UnknownActionIdError {
+  code: "unknown_action_id";
+  message: string;
+}
+
 export type BrowserActionError =
   | BrowserError
   | InvalidActionError
   | ActionFailedError
+  | ActionCancelledError
+  | ActionWaitTimeoutError
   | DisabledTargetError
   | ReadOnlyTargetError
   | NotInteractableError
@@ -223,3 +262,11 @@ export type GetSelectOptionsResult =
 export type SelectOptionResult =
   | { ok: true; url: string; selectedIndex: number }
   | { ok: false; error: BrowserActionError };
+
+export type ScheduledAction =
+  | { ok: true; actionId: ActionId; settled: Promise<BrowserActionResult> }
+  | { ok: false; action: BrowserActionName; error: InvalidActionError };
+
+export type BrowserActionCancelReply =
+  | { ok: true; actionId: ActionId; cancelled: boolean; dispatchStarted: boolean }
+  | { ok: false; actionId: ActionId | null; error: InvalidActionError | UnknownActionIdError };

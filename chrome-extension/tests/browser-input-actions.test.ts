@@ -11,7 +11,7 @@ import {
 } from "../src/browser/actions/input";
 import { BROWSER_ACTION_MESSAGE } from "../src/browser/actions/types";
 import { isDisabled } from "../src/browser/observation/extract";
-import { handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
+import { attachTabActionCoordinator, handleBrowserRuntimeMessage, type BrowserRuntime } from "../src/browser/runtime";
 import type { GroundedTarget, TargetResolutionResult } from "../src/browser/types";
 
 const TARGET: GroundedTarget = {
@@ -21,7 +21,7 @@ const TARGET: GroundedTarget = {
 };
 
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
-  return {
+  return attachTabActionCoordinator({
     selectedTabId: 7,
     useActiveTab: async () => ({ ok: true, tabId: 7 }),
     observe: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
@@ -37,7 +37,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     closeTab: async () => ({ ok: false, error: { code: "missing_tab", message: "not used" } }),
     listTabs: async () => ({ ok: true, tabs: [] }),
     ...overrides,
-  };
+  });
 }
 
 describe("browser_type dispatch", () => {

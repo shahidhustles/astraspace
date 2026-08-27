@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   ATTACH_ACTIVE_TAB_MESSAGE,
+  attachTabActionCoordinator,
   handleBrowserRuntimeMessage,
   OBSERVE_SELECTED_TAB_MESSAGE,
   type BrowserRuntime,
@@ -57,7 +58,7 @@ const OBSERVED_STATE: BrowserState = {
 };
 
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
-  return {
+  return attachTabActionCoordinator({
     selectedTabId: 7,
     useActiveTab: async () => ({ ok: true, tabId: 7 }),
     observe: async () => ({ ok: false, error: { code: "selected_tab_unavailable", message: "not used" } }),
@@ -70,7 +71,7 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
     closeTab: async () => ({ ok: false, error: { code: "missing_tab", message: "not used" } }),
     listTabs: async () => ({ ok: true, tabs: [] }),
     ...overrides,
-  };
+  });
 }
 
 describe("browser runtime messages", () => {

@@ -1,5 +1,13 @@
 import { enforceUrlPolicy } from "./url-policy";
 import { BrowserPage, type AttachResult, type NavResult, type PageDeps } from "./page";
+import { enqueueActionRequest } from "./waits/coordinator";
+import {
+  type BrowserActionCancelReply,
+  type BrowserActionRequest,
+  type ScheduledAction,
+} from "./actions/types";
+import { TabActionCoordinator } from "./waits/coordinator";
+import type { ActionId } from "./waits/types";
 import type {
   ClearInputResult,
   ClickResult,
@@ -47,6 +55,7 @@ interface WaitHandle<T> {
 export class BrowserContext {
   private readonly pages = new Map<number, BrowserPage>();
   private readonly pending = new Map<number, Promise<AttachResult>>();
+  private readonly actionCoordinator = new TabActionCoordinator();
   private readonly deps: ContextDeps;
   private readonly stopListeners: (() => void)[] = [];
   private selectedTab: number | null = null;
@@ -90,6 +99,14 @@ export class BrowserContext {
 
   get tabCount(): number {
     return this.pages.size;
+  }
+
+  scheduleAction(input: { request: BrowserActionRequest; tabId: number }): ScheduledAction {
+    return enqueueActionRequest(this.actionCoordinator, input.request, input.tabId, this);
+  }
+
+  cancelAction(id: ActionId): BrowserActionCancelReply {
+    return this.actionCoordinator.cancel(id);
   }
 
   async useActiveTab(): Promise<AttachResult> {

@@ -1,6 +1,10 @@
 import type { GroundedTarget, SnapshotId } from "../types";
+import { MAX_WAIT_TIMEOUT_MS, toActionId, type ActionId } from "../waits/types";
 import {
+  BROWSER_ACTION_CANCEL_MESSAGE,
   BROWSER_ACTION_MESSAGE,
+  type ActionExpectationPolicy,
+  type ActionWaitPolicy,
   type BrowserActionName,
   type BrowserActionRequest,
   type BrowserScrollMode,
@@ -13,6 +17,14 @@ export type BrowserActionParseResult =
   | { ok: true; request: BrowserActionRequest }
   | { ok: false; action: BrowserActionName | null; error: InvalidActionError };
 
+export type BrowserCancelParseResult =
+  | { ok: true; actionId: ActionId }
+  | { ok: false; error: InvalidActionError };
+
+const REQUEST_KEYS = ["type", "action", "input", "actionId", "wait"] as const;
+
+const MAX_ACTION_ID_LENGTH = 128;
+
 export function parseBrowserActionMessage(message: unknown): BrowserActionParseResult {
   if (!isRecord(message)) {
     return invalid(null, "Browser action message must be an object");
@@ -23,9 +35,20 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
   if (typeof message.action !== "string") {
     return invalid(null, "Missing action name");
   }
-  if (!hasOnlyKeys(message, ["type", "action", "input"])) {
+  if (!hasOnlyKeys(message, REQUEST_KEYS)) {
     return invalid(null, "Browser action request has unknown fields");
   }
+
+  const action = knownActionName(message.action);
+  const actionId = parseActionIdField(message.actionId);
+  if (!actionId.ok) {
+    return invalid(action, actionId.message);
+  }
+  const wait = parseWaitPolicy(message.wait);
+  if (!wait.ok) {
+    return invalid(action, wait.message);
+  }
+  const envelope = { actionId: actionId.actionId, wait: wait.policy };
 
   switch (message.action) {
     case "browser_navigate": {
@@ -41,14 +64,14 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_navigate", input: { url: input.url } },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_navigate", input: { url: input.url } },
       };
     }
     case "browser_back": {
-      return parseNoInputRequest(message, "browser_back");
+      return parseNoInputRequest(message, "browser_back", envelope);
     }
     case "browser_refresh": {
-      return parseNoInputRequest(message, "browser_refresh");
+      return parseNoInputRequest(message, "browser_refresh", envelope);
     }
     case "browser_click": {
       const target = parseGroundedTarget(message.input, "browser_click");
@@ -57,7 +80,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_click", input: target.target },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_click", input: target.target },
       };
     }
     case "browser_type": {
@@ -78,6 +101,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       return {
         ok: true,
         request: {
+          ...envelope,
           type: BROWSER_ACTION_MESSAGE,
           action: "browser_type",
           input: { target: target.target, text: input.text },
@@ -91,7 +115,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_clear_input", input: target.target },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_clear_input", input: target.target },
       };
     }
     case "browser_keypress": {
@@ -101,7 +125,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_keypress", input: parsed.input },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_keypress", input: parsed.input },
       };
     }
     case "browser_scroll": {
@@ -111,7 +135,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll", input: parsed.input },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_scroll", input: parsed.input },
       };
     }
     case "browser_scroll_to_text": {
@@ -121,7 +145,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: parsed.input },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_scroll_to_text", input: parsed.input },
       };
     }
     case "browser_get_select_options": {
@@ -131,7 +155,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_get_select_options", input: target.target },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_get_select_options", input: target.target },
       };
     }
     case "browser_select_option": {
@@ -141,7 +165,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_select_option", input: parsed.input },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_select_option", input: parsed.input },
       };
     }
     case "browser_open_tab": {
@@ -151,7 +175,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_open_tab", input: { url: url.url } },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_open_tab", input: { url: url.url } },
       };
     }
     case "browser_switch_tab": {
@@ -161,7 +185,7 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_switch_tab", input: { tabId: tabId.tabId } },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_switch_tab", input: { tabId: tabId.tabId } },
       };
     }
     case "browser_close_tab": {
@@ -171,17 +195,133 @@ export function parseBrowserActionMessage(message: unknown): BrowserActionParseR
       }
       return {
         ok: true,
-        request: { type: BROWSER_ACTION_MESSAGE, action: "browser_close_tab", input: { tabId: tabId.tabId } },
+        request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action: "browser_close_tab", input: { tabId: tabId.tabId } },
       };
     }
     default:
-      return invalid(null, `Unknown browser action: ${message.action}`);
+      return invalid(null, `Unknown browser action: ${String(message.action)}`);
   }
 }
+
+export function parseBrowserCancelMessage(message: unknown): BrowserCancelParseResult {
+  if (!isRecord(message)) {
+    return { ok: false, error: { code: "invalid_action", message: "Browser cancel message must be an object" } };
+  }
+  if (message.type !== BROWSER_ACTION_CANCEL_MESSAGE) {
+    return { ok: false, error: { code: "invalid_action", message: "Not a browser action cancel message" } };
+  }
+  if (!hasOnlyKeys(message, ["type", "actionId"])) {
+    return { ok: false, error: { code: "invalid_action", message: "Browser cancel message has unknown fields" } };
+  }
+  if (message.actionId === undefined) {
+    return { ok: false, error: { code: "invalid_action", message: "Browser cancel message requires an actionId" } };
+  }
+  const raw = message.actionId;
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_ACTION_ID_LENGTH) {
+    return { ok: false, error: { code: "invalid_action", message: "actionId must be a non-empty string" } };
+  }
+  return { ok: true, actionId: toActionId(raw) };
+}
+
+function knownActionName(candidate: string): BrowserActionName | null {
+  switch (candidate) {
+    case "browser_navigate":
+    case "browser_back":
+    case "browser_refresh":
+    case "browser_click":
+    case "browser_type":
+    case "browser_clear_input":
+    case "browser_keypress":
+    case "browser_scroll":
+    case "browser_scroll_to_text":
+    case "browser_get_select_options":
+    case "browser_select_option":
+    case "browser_open_tab":
+    case "browser_switch_tab":
+    case "browser_close_tab":
+      return candidate;
+    default:
+      return null;
+  }
+}
+
+function parseActionIdField(value: unknown): { ok: true; actionId: ActionId | null } | { ok: false; message: string } {
+  if (value === undefined) {
+    return { ok: true, actionId: null };
+  }
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_ACTION_ID_LENGTH) {
+    return { ok: false, message: "actionId must be a non-empty string" };
+  }
+  return { ok: true, actionId: toActionId(value) };
+}
+
+function parseWaitPolicy(value: unknown): { ok: true; policy: ActionWaitPolicy } | { ok: false; message: string } {
+  if (value === undefined) {
+    return { ok: true, policy: { timeoutMs: null, expectation: null } };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, message: "wait must be an object" };
+  }
+  if (!hasOnlyKeys(value, ["timeoutMs", "expectation"])) {
+    return { ok: false, message: "wait has unknown fields" };
+  }
+  if (value.timeoutMs === undefined && value.expectation === undefined) {
+    return { ok: false, message: "wait requires timeoutMs or expectation" };
+  }
+
+  let timeoutMs: number | null = null;
+  if (value.timeoutMs !== undefined) {
+    const raw = value.timeoutMs;
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > MAX_WAIT_TIMEOUT_MS) {
+      return {
+        ok: false,
+        message: `wait requires an integer timeoutMs from 1 through ${MAX_WAIT_TIMEOUT_MS}`,
+      };
+    }
+    timeoutMs = raw;
+  }
+
+  let expectation: ActionExpectationPolicy | null = null;
+  if (value.expectation !== undefined) {
+    const parsed = parseExpectationPolicy(value.expectation);
+    if (!parsed.ok) {
+      return { ok: false, message: parsed.message };
+    }
+    expectation = parsed.policy;
+  }
+
+  return { ok: true, policy: { timeoutMs, expectation } };
+}
+
+function parseExpectationPolicy(
+  value: unknown,
+): { ok: true; policy: ActionExpectationPolicy } | { ok: false; message: string } {
+  if (!isRecord(value)) {
+    return { ok: false, message: "wait expectation must be an object" };
+  }
+  if (!hasOnlyKeys(value, ["intent", "role", "name"])) {
+    return { ok: false, message: "wait expectation has unknown fields" };
+  }
+  if (value.intent !== "appear" && value.intent !== "disappear") {
+    return { ok: false, message: 'wait expectation intent must be "appear" or "disappear"' };
+  }
+  if (typeof value.role !== "string" || value.role.length === 0) {
+    return { ok: false, message: "wait expectation requires a non-empty string role" };
+  }
+  if (typeof value.name !== "string" || value.name.length === 0) {
+    return { ok: false, message: "wait expectation requires a non-empty string name" };
+  }
+  return {
+    ok: true,
+    policy: { intent: value.intent, role: value.role, name: value.name },
+  };
+}
+
 
 function parseNoInputRequest(
   message: Record<string, unknown>,
   action: "browser_back" | "browser_refresh",
+  envelope: { actionId: ActionId | null; wait: ActionWaitPolicy },
 ): BrowserActionParseResult {
   if (!isRecord(message.input)) {
     return invalid(action, `${action} requires an input object`);
@@ -191,7 +331,7 @@ function parseNoInputRequest(
   }
   return {
     ok: true,
-    request: { type: BROWSER_ACTION_MESSAGE, action, input: {} },
+    request: { ...envelope, type: BROWSER_ACTION_MESSAGE, action, input: {} },
   };
 }
 

@@ -36,11 +36,31 @@ export interface BrowserActionRuntime {
   listTabs: () => Promise<TabListResult>;
 }
 
+// One place decides which tab an action acts on, so scheduling and dispatch
+// agree. Targeted actions use their target's tab; everything else follows the
+// selected tab.
+export function resolveActionTabId(request: BrowserActionRequest, selectedTabId: number | null): number | null {
+  switch (request.action) {
+    case "browser_click":
+    case "browser_clear_input":
+    case "browser_get_select_options":
+      return request.input.tabId;
+    case "browser_type":
+      return request.input.target.tabId;
+    case "browser_select_option":
+      return request.input.target.tabId;
+    case "browser_keypress":
+    case "browser_scroll":
+      return request.input.target ? request.input.target.tabId : selectedTabId;
+    default:
+      return selectedTabId;
+  }
+}
+
 export async function dispatchBrowserAction(
   request: BrowserActionRequest,
   runtime: BrowserActionRuntime,
-): Promise<BrowserActionResult> {
-  const action = request.action;
+): Promise<BrowserActionResult> {  const action = request.action;
   try {
     switch (action) {
       case "browser_navigate":
