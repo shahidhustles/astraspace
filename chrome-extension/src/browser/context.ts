@@ -7,7 +7,7 @@ import {
   type ScheduledAction,
 } from "./actions/types";
 import { TabActionCoordinator } from "./waits/coordinator";
-import type { ActionId } from "./waits/types";
+import type { ActionId, ActionSettleContext } from "./waits/types";
 import type {
   ClearInputResult,
   ClickResult,
@@ -343,23 +343,23 @@ export class BrowserContext {
     return page.click(target);
   }
 
-  async type(target: GroundedTarget, text: string): Promise<TypeResult> {
+  async type(target: GroundedTarget, text: string, settle?: ActionSettleContext): Promise<TypeResult> {
     const page = this.pages.get(target.tabId);
     if (!page) {
       return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
     }
-    return page.type(target, text);
+    return page.type(target, text, settle);
   }
 
-  async clearInput(target: GroundedTarget): Promise<ClearInputResult> {
+  async clearInput(target: GroundedTarget, settle?: ActionSettleContext): Promise<ClearInputResult> {
     const page = this.pages.get(target.tabId);
     if (!page) {
       return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
     }
-    return page.clearInput(target);
+    return page.clearInput(target, settle);
   }
 
-  async keypress(input: KeypressInput): Promise<KeypressResult> {
+  async keypress(input: KeypressInput, settle?: ActionSettleContext): Promise<KeypressResult> {
     if (input.target) {
       const page = this.pages.get(input.target.tabId);
       if (!page) {
@@ -368,13 +368,13 @@ export class BrowserContext {
           error: { code: "stale_ref", message: "No page connection for this tab", target: input.target },
         };
       }
-      return page.keypress(input);
+      return page.keypress(input, settle);
     }
     const page = this.selectedPage();
     if (!page) {
       return { ok: false, error: { code: "selected_tab_unavailable", message: "No selected live connection" } };
     }
-    return page.keypress(input);
+    return page.keypress(input, settle);
   }
 
   async scroll(input: ScrollInput): Promise<ScrollResult> {
@@ -411,12 +411,16 @@ export class BrowserContext {
     return page.getSelectOptions(target);
   }
 
-  async selectOption(target: GroundedTarget, option: SelectOptionIdentity): Promise<SelectOptionResult> {
+  async selectOption(
+    target: GroundedTarget,
+    option: SelectOptionIdentity,
+    settle?: ActionSettleContext,
+  ): Promise<SelectOptionResult> {
     const page = this.pages.get(target.tabId);
     if (!page) {
       return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
     }
-    return page.selectOption(target, option);
+    return page.selectOption(target, option, settle);
   }
 
   async closeTab(tabId: number): Promise<CloseResult> {

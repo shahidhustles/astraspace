@@ -1,6 +1,7 @@
 import type { CloseResult, TabListResult } from "../context";
 import type { AttachResult, NavResult } from "../page";
 import type { GroundedTarget, TabInfo } from "../types";
+import type { ActionSettleContext } from "../waits/types";
 import type {
   BrowserActionResult,
   BrowserActionRequest,
@@ -23,13 +24,17 @@ export interface BrowserActionRuntime {
   goBack: () => Promise<NavResult>;
   refresh: () => Promise<NavResult>;
   click: (target: GroundedTarget) => Promise<ClickResult>;
-  type: (target: GroundedTarget, text: string) => Promise<TypeResult>;
-  clearInput: (target: GroundedTarget) => Promise<ClearInputResult>;
-  keypress: (input: KeypressInput) => Promise<KeypressResult>;
+  type: (target: GroundedTarget, text: string, settle?: ActionSettleContext) => Promise<TypeResult>;
+  clearInput: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClearInputResult>;
+  keypress: (input: KeypressInput, settle?: ActionSettleContext) => Promise<KeypressResult>;
   scroll: (input: ScrollInput) => Promise<ScrollResult>;
   scrollToText: (text: string, occurrence: number) => Promise<ScrollResult>;
   getSelectOptions: (target: GroundedTarget) => Promise<GetSelectOptionsResult>;
-  selectOption: (target: GroundedTarget, option: SelectOptionIdentity) => Promise<SelectOptionResult>;
+  selectOption: (
+    target: GroundedTarget,
+    option: SelectOptionIdentity,
+    settle?: ActionSettleContext,
+  ) => Promise<SelectOptionResult>;
   openTab: (url: string) => Promise<AttachResult>;
   switchTab: (tabId: number) => Promise<AttachResult>;
   closeTab: (tabId: number) => Promise<CloseResult>;
@@ -60,7 +65,9 @@ export function resolveActionTabId(request: BrowserActionRequest, selectedTabId:
 export async function dispatchBrowserAction(
   request: BrowserActionRequest,
   runtime: BrowserActionRuntime,
-): Promise<BrowserActionResult> {  const action = request.action;
+  settle?: ActionSettleContext,
+): Promise<BrowserActionResult> {
+  const action = request.action;
   try {
     switch (action) {
       case "browser_navigate":
@@ -75,16 +82,16 @@ export async function dispatchBrowserAction(
         return await mutatingTargetAction(
           "browser_type",
           request.input.target,
-          () => runtime.type(request.input.target, request.input.text),
+          () => runtime.type(request.input.target, request.input.text, settle),
         );
       case "browser_clear_input":
         return await mutatingTargetAction(
           "browser_clear_input",
           request.input,
-          () => runtime.clearInput(request.input),
+          () => runtime.clearInput(request.input, settle),
         );
       case "browser_keypress":
-        return await keypressAction(request.input, runtime);
+        return await keypressAction(request.input, runtime, settle);
       case "browser_scroll":
         return await scrollAction(request.input, runtime);
       case "browser_scroll_to_text":
@@ -92,7 +99,7 @@ export async function dispatchBrowserAction(
       case "browser_get_select_options":
         return await selectOptionsAction(request.input, runtime);
       case "browser_select_option":
-        return await selectOptionAction(request.input, runtime);
+        return await selectOptionAction(request.input, runtime, settle);
       case "browser_open_tab":
         return await tabLifecycleAction(
           "browser_open_tab",
@@ -168,11 +175,16 @@ async function mutatingTargetAction(
     tabId: target.tabId,
     url: result.url,
     snapshotInvalidated: true,
+    ...(result.signals ? { signals: result.signals } : {}),
     data: action === "browser_type" ? { kind: "type" } : { kind: "clear_input" },
   };
 }
 
-async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
+async function keypressAction(
+  input: KeypressInput,
+  runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
+): Promise<BrowserActionResult> {
   const tabId = input.target?.tabId ?? runtime.selectedTabId;
   if (tabId === null) {
     return {
@@ -182,7 +194,7 @@ async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntim
       error: { code: "selected_tab_unavailable", message: "No selected live connection" },
     };
   }
-  const result = await runtime.keypress(input);
+  const result = await runtime.keypress(input, settle);
   if (!result.ok) {
     return { ok: false, action: "browser_keypress", tabId, error: result.error };
   }
@@ -192,6 +204,7 @@ async function keypressAction(input: KeypressInput, runtime: BrowserActionRuntim
     tabId,
     url: result.url,
     snapshotInvalidated: true,
+    ...(result.signals ? { signals: result.signals } : {}),
     data: { kind: "keypress" },
   };
 }
@@ -272,9 +285,10 @@ async function selectOptionsAction(
 async function selectOptionAction(
   input: { target: GroundedTarget; index: number; label: string; value: string },
   runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
 ): Promise<BrowserActionResult> {
   const identity: SelectOptionIdentity = { index: input.index, label: input.label, value: input.value };
-  const result = await runtime.selectOption(input.target, identity);
+  const result = await runtime.selectOption(input.target, identity, settle);
   if (!result.ok) {
     return { ok: false, action: "browser_select_option", tabId: input.target.tabId, error: result.error };
   }
@@ -284,6 +298,7 @@ async function selectOptionAction(
     tabId: input.target.tabId,
     url: result.url,
     snapshotInvalidated: true,
+    ...(result.signals ? { signals: result.signals } : {}),
     data: { kind: "select_option", selectedIndex: result.selectedIndex },
   };
 }

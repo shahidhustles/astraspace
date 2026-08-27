@@ -1,4 +1,5 @@
 import type { GroundedTarget, TargetResolutionResult } from "../types";
+import type { ActionSettleSignals } from "../waits/types";
 import type {
   GetSelectOptionsResult,
   SelectOption,
@@ -11,6 +12,8 @@ export interface SelectDeps {
   resolveTarget: (target: GroundedTarget) => Promise<TargetResolutionResult>;
   invalidate: () => void;
   currentUrl: () => string;
+  // Runs after a successful selection; resolves null when none was armed.
+  settle?: () => Promise<ActionSettleSignals | null>;
 }
 
 export type SelectLookup =
@@ -88,7 +91,8 @@ export async function selectOption(
     if (selectedIndex !== lookup.index) {
       return { ok: false, error: { code: "action_failed", message: "The option could not be selected" } };
     }
-    return { ok: true, url: deps.currentUrl(), selectedIndex };
+    const signals = (await deps.settle?.()) ?? undefined;
+    return { ok: true, url: deps.currentUrl(), selectedIndex, ...(signals ? { signals } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {

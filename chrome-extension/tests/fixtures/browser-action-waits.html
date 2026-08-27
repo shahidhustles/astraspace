@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Browser action waits fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        padding: 12px;
+        font-size: 14px;
+      }
+      label {
+        display: block;
+        margin: 12px 0 4px;
+      }
+      input,
+      select {
+        width: 240px;
+        padding: 4px;
+      }
+      #log {
+        margin-top: 16px;
+        padding: 8px;
+        background: #f4f4f4;
+        min-height: 40px;
+        white-space: pre-line;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Waits fixture</h1>
+    <label for="suggest-input">Suggest input</label>
+    <input id="suggest-input" aria-label="Suggest input" autocomplete="off" />
+    <ul id="suggest-list"></ul>
+
+    <label for="fail-input">Fail input</label>
+    <input id="fail-input" aria-label="Fail input" autocomplete="off" />
+
+    <label for="ws-input">Ws input</label>
+    <input id="ws-input" aria-label="Ws input" autocomplete="off" />
+
+    <label for="chip-select">Chip select</label>
+    <select id="chip-select" aria-label="Chip select">
+      <option value="none" selected>Pick chips</option>
+      <option value="green">Green chip</option>
+      <option value="red">Red chip</option>
+    </select>
+    <div id="chips"></div>
+
+    <div id="log"></div>
+
+    <script>
+      var timers = {};
+      function debounce(key, fn, wait) {
+        clearTimeout(timers[key]);
+        timers[key] = setTimeout(fn, wait);
+      }
+      function log(entry) {
+        var line = document.createElement("div");
+        line.textContent = entry;
+        document.getElementById("log").appendChild(line);
+      }
+
+      var suggest = document.getElementById("suggest-input");
+      suggest.addEventListener("input", function () {
+        var q = suggest.value.trim();
+        if (!q) return;
+        debounce("suggest", function () {
+          fetch("/respond?kind=suggest&q=" + encodeURIComponent(q))
+            .then(function (response) { return response.json(); })
+            .then(function (items) {
+              var list = document.getElementById("suggest-list");
+              list.innerHTML = "";
+              items.forEach(function (label) {
+                var item = document.createElement("li");
+                item.textContent = label;
+                list.appendChild(item);
+              });
+              log("rendered:" + items.length);
+            });
+        }, 100);
+      });
+
+      document.getElementById("fail-input").addEventListener("input", function () {
+        var controller = new AbortController();
+        fetch("/respond?kind=suggest&q=fail", { signal: controller.signal })
+          .then(function () { log("unexpected-success"); })
+          .catch(function () { log("fetch-failed"); });
+        setTimeout(function () { controller.abort(); }, 50);
+      });
+
+      var wsOpened = false;
+      window.__wsReadyState = 0;
+      document.getElementById("ws-input").addEventListener("input", function () {
+        var probe = new Image();
+        probe.src = "/pixel.png";
+        if (wsOpened) return;
+        wsOpened = true;
+        var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        var socket = new WebSocket(protocol + "//" + location.host + "/ws");
+        window.__wsSocket = socket;
+        socket.onopen = function () {
+          window.__wsReadyState = socket.readyState;
+          log("ws-open");
+        };
+        socket.onclose = function () {
+          window.__wsReadyState = socket.readyState;
+        };
+      });
+
+      document.getElementById("chip-select").addEventListener("change", function (event) {
+        var choice = event.target.value;
+        if (choice === "none") return;
+        debounce("chips", function () {
+          var host = document.getElementById("chips");
+          ["left", choice].forEach(function (name) {
+            var chip = document.createElement("span");
+            chip.textContent = name + "-chip";
+            host.appendChild(chip);
+          });
+          log("chips-rendered:" + choice);
+        }, 200);
+      });
+    </script>
+  </body>
+</html>

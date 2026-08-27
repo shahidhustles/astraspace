@@ -6,14 +6,19 @@ import type {
   BrowserActionResult,
   ScheduledAction,
 } from "../actions/types";
-import { DEFAULT_QUEUE_DEADLINE_MS, createActionId, type ActionId } from "./types";
+import {
+  DEFAULT_QUEUE_DEADLINE_MS,
+  createActionId,
+  type ActionDispatchBudget,
+  type ActionId,
+} from "./types";
 
 export interface ActionWorkInput {
   tabId: number;
   name: BrowserActionName;
   requestedId?: ActionId | null;
   deadlineMs?: number | null;
-  work: (signal: AbortSignal) => Promise<BrowserActionResult>;
+  work: (signal: AbortSignal, budget: ActionDispatchBudget) => Promise<BrowserActionResult>;
 }
 
 interface Lane {
@@ -26,8 +31,10 @@ interface QueueEntry {
   readonly tabId: number;
   readonly name: BrowserActionName;
   readonly controller: AbortController;
-  readonly work: (signal: AbortSignal) => Promise<BrowserActionResult>;
+  readonly work: (signal: AbortSignal, budget: ActionDispatchBudget) => Promise<BrowserActionResult>;
   readonly resolveSettled: (result: BrowserActionResult) => void;
+  readonly deadlineMs: number | null;
+  readonly acceptedAt: number;
   deadlineTimer: ReturnType<typeof setTimeout> | null;
   state: "queued" | "dispatching";
 }
@@ -69,6 +76,8 @@ export class TabActionCoordinator {
       controller: new AbortController(),
       work: input.work,
       resolveSettled,
+      deadlineMs: input.deadlineMs ?? null,
+      acceptedAt: Date.now(),
       deadlineTimer: null,
       state: "queued",
     };
@@ -210,8 +219,10 @@ export class TabActionCoordinator {
   }
 
   private invokeWork(entry: QueueEntry): Promise<BrowserActionResult> {
+    const remaining =
+      entry.deadlineMs === null ? null : Math.max(0, entry.deadlineMs - (Date.now() - entry.acceptedAt));
     try {
-      return entry.work(entry.controller.signal);
+      return entry.work(entry.controller.signal, { timeoutMs: remaining });
     } catch (error) {
       return Promise.reject(error);
     }
@@ -272,6 +283,6 @@ export function enqueueActionRequest(
     name: request.action,
     requestedId: request.actionId,
     deadlineMs: request.wait?.timeoutMs ?? null,
-    work: () => dispatchBrowserAction(request, runtime),
+    work: (signal, budget) => dispatchBrowserAction(request, runtime, { signal, timeoutMs: budget.timeoutMs }),
   });
 }

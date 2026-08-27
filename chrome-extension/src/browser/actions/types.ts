@@ -1,4 +1,4 @@
-import type { ActionId } from "../waits/types";
+import type { ActionId, ActionSettleSignals } from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
 export const BROWSER_ACTION_MESSAGE = "browser.action";
@@ -228,6 +228,7 @@ export type BrowserActionResult =
       url: string;
       snapshotInvalidated: boolean;
       data: BrowserActionData;
+      signals?: ActionSettleSignals;
     }
   | {
       ok: false;
@@ -240,11 +241,17 @@ export type ClickResult =
   | { ok: true; url: string; newTabId: number | null }
   | { ok: false; error: BrowserActionError };
 
-export type TypeResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+export type TypeResult =
+  | { ok: true; url: string; signals?: ActionSettleSignals }
+  | { ok: false; error: BrowserActionError };
 
-export type ClearInputResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+export type ClearInputResult =
+  | { ok: true; url: string; signals?: ActionSettleSignals }
+  | { ok: false; error: BrowserActionError };
 
-export type KeypressResult = { ok: true; url: string } | { ok: false; error: BrowserActionError };
+export type KeypressResult =
+  | { ok: true; url: string; signals?: ActionSettleSignals }
+  | { ok: false; error: BrowserActionError };
 
 export interface ScrollPosition {
   x: number;
@@ -260,7 +267,7 @@ export type GetSelectOptionsResult =
   | { ok: false; error: BrowserActionError };
 
 export type SelectOptionResult =
-  | { ok: true; url: string; selectedIndex: number }
+  | { ok: true; url: string; selectedIndex: number; signals?: ActionSettleSignals }
   | { ok: false; error: BrowserActionError };
 
 export type ScheduledAction =

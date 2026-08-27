@@ -1,5 +1,6 @@
 import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { GroundedTarget, TargetResolutionResult } from "../types";
+import type { ActionSettleSignals } from "../waits/types";
 import { prepareElementForInteraction } from "./element";
 import type { BrowserActionError, ClearInputResult, TypeResult } from "./types";
 
@@ -7,6 +8,8 @@ export interface InputDeps {
   resolveTarget: (target: GroundedTarget) => Promise<TargetResolutionResult>;
   invalidate: () => void;
   currentUrl: () => string;
+  // Runs after a successful edit; resolves null when no settlement was armed.
+  settle?: () => Promise<ActionSettleSignals | null>;
 }
 
 export type EditabilityResult = { ok: true } | { ok: false; error: BrowserActionError };
@@ -85,7 +88,8 @@ export async function typeGroundedTarget(
     }
     deps.invalidate();
     await element.type(text);
-    return { ok: true, url: deps.currentUrl() };
+    const signals = (await deps.settle?.()) ?? undefined;
+    return { ok: true, url: deps.currentUrl(), ...(signals ? { signals } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {
@@ -110,7 +114,8 @@ export async function clearGroundedTarget(target: GroundedTarget, deps: InputDep
     }
     deps.invalidate();
     await element.evaluate(clearEditableControl);
-    return { ok: true, url: deps.currentUrl() };
+    const signals = (await deps.settle?.()) ?? undefined;
+    return { ok: true, url: deps.currentUrl(), ...(signals ? { signals } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {

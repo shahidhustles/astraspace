@@ -4,6 +4,7 @@ import type {
   KeyInput,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import type { GroundedTarget, TargetResolutionResult } from "../types";
+import type { ActionSettleSignals } from "../waits/types";
 import { prepareElementForInteraction } from "./element";
 import type { KeypressInput, KeypressModifiers, KeypressResult } from "./types";
 
@@ -12,6 +13,7 @@ export interface KeypressDeps {
   invalidate: () => void;
   keyboard: () => Keyboard | null;
   currentUrl: () => string;
+  settle?: () => Promise<ActionSettleSignals | null>;
 }
 
 const KEY_ALIASES: Record<string, KeyInput> = {
@@ -93,7 +95,8 @@ export async function keypressGroundedTarget(input: KeypressInput, deps: Keypres
       pressedModifiers.push(modifier);
     }
     await keyboard.press(toKeyInput(input.key));
-    return { ok: true, url: deps.currentUrl() };
+    const signals = (await deps.settle?.()) ?? undefined;
+    return { ok: true, url: deps.currentUrl(), ...(signals ? { signals } : {}) };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {
