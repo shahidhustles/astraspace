@@ -335,12 +335,12 @@ export class BrowserContext {
     return page.reload();
   }
 
-  async click(target: GroundedTarget): Promise<ClickResult> {
+  async click(target: GroundedTarget, settle?: ActionSettleContext): Promise<ClickResult> {
     const page = this.pages.get(target.tabId);
     if (!page) {
       return { ok: false, error: { code: "stale_ref", message: "No page connection for this tab", target } };
     }
-    return page.click(target);
+    return page.click(target, settle);
   }
 
   async type(target: GroundedTarget, text: string, settle?: ActionSettleContext): Promise<TypeResult> {

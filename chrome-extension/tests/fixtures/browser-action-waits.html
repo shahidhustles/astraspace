@@ -55,9 +55,67 @@
     <div id="iframe-host"></div>
     <div id="nav-log"></div>
 
+    <h2>Clicks</h2>
+    <button id="idle-click" type="button">Idle click</button>
+    <button id="dom-click" type="button">Dom click</button>
+    <ul id="dom-list"></ul>
+    <button id="nav-click" type="button">Nav click</button>
+    <button id="route-click" type="button">Route click</button>
+    <div id="toast-host"></div>
+    <iframe id="expect-frame" src="/child.html"></iframe>
+
     <div id="log"></div>
 
     <script>
+      function frameDoc() {
+        var frame = document.getElementById("expect-frame");
+        return frame && frame.contentWindow ? frame.contentWindow.document : null;
+      }
+      function armToast(after, host) {
+        setTimeout(function () {
+          var marker = document.createElement("div");
+          marker.setAttribute("role", "dialog");
+          marker.setAttribute("aria-label", "Import ready");
+          host.appendChild(marker);
+        }, after);
+      }
+
+      document.getElementById("idle-click").addEventListener("click", function () {});
+      document.getElementById("dom-click").addEventListener("click", function () {
+        var item = document.createElement("li");
+        item.textContent = "appended";
+        document.getElementById("dom-list").appendChild(item);
+      });
+      document.getElementById("nav-click").addEventListener("click", function () {
+        // Synchronous assignment keeps the document request inside every
+        // settle window instead of racing stability completion.
+        location.assign("?step=clicked");
+      });
+      document.getElementById("route-click").addEventListener("click", function () {
+        history.pushState({ route: "#clicked" }, "", "#clicked");
+        navLog("route-clicked");
+      });
+
+      // Expectation drivers stay inert until a test calls them.
+      window.__appearMain = function () { armToast(200, document.getElementById("toast-host")); };
+      window.__appearAmbiguous = function () {
+        setTimeout(function () {
+          var host = document.getElementById("toast-host");
+          for (var i = 0; i < 2; i++) { armToast(50, host); }
+        }, 10);
+      };
+      window.__appearInFrame = function () {
+        var doc = frameDoc();
+        if (!doc || !doc.body) return;
+        armToast(200, doc.body);
+      };
+      window.__disappearFromFrame = function () {
+        var doc = frameDoc();
+        if (!doc) return;
+        var probe = doc.getElementById("child-removable");
+        if (probe && probe.parentNode) { setTimeout(function () { probe.remove(); }, 150); }
+      };
+
       var timers = {};
       function debounce(key, fn, wait) {
         clearTimeout(timers[key]);

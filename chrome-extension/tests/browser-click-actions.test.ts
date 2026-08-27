@@ -239,25 +239,19 @@ describe("clickGroundedTarget", () => {
   interface FakeDeps {
     log: string[];
     deps: ClickDeps;
-    listeners: Array<(tab: chrome.tabs.Tab) => void>;
   }
 
   function fakeDeps(overrides: Partial<ClickDeps> = {}): FakeDeps {
     const log: string[] = [];
-    const listeners: Array<(tab: chrome.tabs.Tab) => void> = [];
     return {
       log,
-      listeners,
       deps: {
         resolveTarget: async (): Promise<TargetResolutionResult> => {
           log.push("resolve");
           return { ok: true, element: fakeHandle(handleCalls()) };
         },
-        onCreated: (listener) => {
-          listeners.push(listener);
-          log.push("listen");
-          return () => log.push("stop");
-        },
+        settle: async () => null,
+        finishActivation: () => log.push("finish"),
         invalidate: () => log.push("invalidate"),
         currentUrl: () => "https://example.com/final",
         ...overrides,
@@ -289,55 +283,56 @@ describe("clickGroundedTarget", () => {
     const result = await clickGroundedTarget(TARGET, deps);
 
     expect(result).toEqual({ ok: true, url: "https://example.com/final", newTabId: null });
-    expect(log).toEqual(["resolve", "listen", "invalidate", "stop"]);
+    expect(log).toEqual(["resolve", "invalidate", "finish"]);
     expect(calls.evaluate).toBe(true);
     expect(calls.isHidden).toBe(true);
     expect(calls.scrollIntoView).toBe(true);
     expect(calls.click).toBe(true);
     expect(calls.dispose).toBe(true);
-    expect(log).toContain("stop");
-    expect(log.indexOf("listen")).toBeLessThan(log.indexOf("invalidate"));
   });
 
-  test("reports a tab observed while the click was in flight", async () => {
+  test("passes captured popup and measurement evidence through", async () => {
     const calls = handleCalls();
-    const { listeners, deps } = fakeDeps({
-      resolveTarget: async () => ({
-        ok: true,
-        element: fakeHandle(calls, {
-          click: async () => {
-            listeners[0]?.({ id: 42, openerTabId: TARGET.tabId } as chrome.tabs.Tab);
-          },
-        }),
+    const { deps } = fakeDeps({
+      resolveTarget: async () => ({ ok: true, element: fakeHandle(calls) }),
+      settle: async () => ({
+        ok: true as const,
+        newTabId: 42,
+        finalUrl: "https://example.com/after",
+        measurement: { outcome: "dom_update" as const },
       }),
     });
 
     const result = await clickGroundedTarget(TARGET, deps);
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/final", newTabId: 42 });
-    expect(listeners).toHaveLength(1);
+    expect(result).toEqual({
+      ok: true,
+      url: "https://example.com/after",
+      newTabId: 42,
+      measurement: { outcome: "dom_update" },
+    });
   });
 
-  test("ignores tabs that were not opened by the clicked tab", async () => {
-    const calls = handleCalls();
-    const { listeners, deps } = fakeDeps({
-      resolveTarget: async () => ({
-        ok: true,
-        element: fakeHandle(calls, {
-          click: async () => {
-            listeners[0]?.({ id: 41, openerTabId: 99 } as chrome.tabs.Tab);
-            listeners[0]?.({ id: 42, openerTabId: TARGET.tabId } as chrome.tabs.Tab);
-          },
-        }),
+  test("reports a failure capture from the settle barrier unchanged", async () => {
+    const calls = { ...handleCalls() };
+    const { deps } = fakeDeps({
+      resolveTarget: async () => ({ ok: true, element: fakeHandle(calls) }),
+      settle: async () => ({
+        ok: false as const,
+        error: { code: "redirect_unsupported" as const, message: "blocked" },
       }),
     });
+    calls.click = true;
 
     const result = await clickGroundedTarget(TARGET, deps);
 
-    expect(result).toEqual({ ok: true, url: "https://example.com/final", newTabId: 42 });
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "redirect_unsupported", message: "blocked" },
+    });
   });
 
-  test("stops the listener and disposes the handle when the click throws", async () => {
+  test("stops the activation and disposes the handle when the click throws", async () => {
     const calls = handleCalls();
     const { log, deps } = fakeDeps({
       resolveTarget: async () => ({ ok: true, element: fakeHandle(calls, { click: async () => { throw new Error("detached"); } }) }),
@@ -349,7 +344,7 @@ describe("clickGroundedTarget", () => {
       ok: false,
       error: { code: "action_failed", message: "Element interaction failed" },
     });
-    expect(log).toEqual(["listen", "invalidate", "stop"]);
+    expect(log).toEqual(["invalidate", "finish"]);
     expect(calls.dispose).toBe(true);
   });
 
@@ -375,7 +370,7 @@ describe("clickGroundedTarget", () => {
     expect(calls.evaluate).toBe(false);
   });
 
-  test("rejects a disabled target without registering the listener or invalidating", async () => {
+  test("rejects a disabled target before any activation side effect", async () => {
     const calls = { ...handleCalls(), disabled: true };
     const { log, deps } = fakeDeps({
       resolveTarget: async () => ({ ok: true, element: fakeHandle(calls) }),
@@ -387,7 +382,7 @@ describe("clickGroundedTarget", () => {
       ok: false,
       error: { code: "disabled_target", message: "Element is disabled" },
     });
-    expect(log).toEqual([]);
+    expect(log).toEqual(["finish"]);
     expect(calls.dispose).toBe(true);
   });
 
@@ -403,7 +398,7 @@ describe("clickGroundedTarget", () => {
       ok: false,
       error: { code: "file_upload_required", message: "File upload is not supported" },
     });
-    expect(log).toEqual([]);
+    expect(log).toEqual(["finish"]);
     expect(calls.click).toBe(false);
     expect(calls.dispose).toBe(true);
   });
@@ -420,7 +415,7 @@ describe("clickGroundedTarget", () => {
       ok: false,
       error: { code: "not_interactable", message: "Element is covered or cannot receive pointer events" },
     });
-    expect(log).toEqual([]);
+    expect(log).toEqual(["finish"]);
     expect(calls.click).toBe(false);
     expect(calls.dispose).toBe(true);
   });

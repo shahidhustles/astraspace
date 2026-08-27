@@ -1,12 +1,16 @@
 import type { ElementHandle } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 import { isDisabled } from "../observation/extract";
 import type { GroundedTarget, TargetResolutionResult } from "../types";
-import { registerNewTabDetector } from "./new-tab";
-import type { BrowserActionError, ClickResult } from "./types";
+import type { BrowserActionError, ClickCapture, ClickResult } from "./types";
 
 export interface ClickDeps {
   resolveTarget: (target: GroundedTarget) => Promise<TargetResolutionResult>;
-  onCreated: (listener: (tab: chrome.tabs.Tab) => void) => () => void;
+  // Armed before the snapshot invalidates. After the click resolves it runs
+  // the bounded settlement barrier and returns captured evidence, or null
+  // when nothing was armed.
+  settle?: () => Promise<ClickCapture | null>;
+  // Cleans up anything the settlement armed even when the click never fired.
+  finishActivation?: () => void;
   invalidate: () => void;
   currentUrl: () => string;
 }
@@ -72,17 +76,26 @@ export async function clickGroundedTarget(target: GroundedTarget, deps: ClickDep
         error: { code: "not_interactable", message: "Element is covered or cannot receive pointer events" },
       };
     }
-    const detector = registerNewTabDetector(target.tabId, deps.onCreated);
-    try {
-      deps.invalidate();
-      await element.click();
-      return { ok: true, url: deps.currentUrl(), newTabId: detector.observedTabId() };
-    } finally {
-      detector.stop();
+    deps.invalidate();
+    await element.click();
+    const captured = (await deps.settle?.()) ?? null;
+    if (captured && !captured.ok) {
+      return captured;
     }
+    // A settle-less click keeps its historical result shape: measurement only
+    // appears when the barrier actually measured something.
+    const measured = captured && captured.ok ? captured.measurement : undefined;
+    const hasMeasurement = measured !== undefined && Object.keys(measured).length > 0;
+    return {
+      ok: true,
+      url: captured && captured.ok && captured.finalUrl ? captured.finalUrl : deps.currentUrl(),
+      newTabId: captured && captured.ok ? captured.newTabId : null,
+      ...(hasMeasurement && measured ? { measurement: measured } : {}),
+    };
   } catch {
     return { ok: false, error: { code: "action_failed", message: "Element interaction failed" } };
   } finally {
+    deps.finishActivation?.();
     await element.dispose().catch(() => {});
   }
 }

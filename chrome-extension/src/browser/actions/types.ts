@@ -1,4 +1,10 @@
-import type { ActionId, ActionSettleSignals } from "../waits/types";
+import type {
+  ActionId,
+  ActionSettleSignals,
+  ExpectationSignal,
+  LayoutSignal,
+  NavigationCommitRecord,
+} from "../waits/types";
 import type { BrowserError, GroundedTarget, TabInfo } from "../types";
 
 export const BROWSER_ACTION_MESSAGE = "browser.action";
@@ -114,7 +120,7 @@ export type BrowserActionData =
   | { kind: "navigate" }
   | { kind: "back" }
   | { kind: "refresh" }
-  | { kind: "click"; newTabId: number | null }
+  | { kind: "click"; newTabId: number | null; measured?: ClickMeasurement }
   | { kind: "type" }
   | { kind: "clear_input" }
   | { kind: "keypress" }
@@ -237,8 +243,25 @@ export type BrowserActionResult =
       error: BrowserActionError;
     };
 
+// What a click measured between activation and settlement. `outcome` names the
+// strongest evidence found: a document swap beats a route change beats a
+// stable layout. Commits list every recorded hop either way.
+export interface ClickMeasurement {
+  outcome?: "navigation" | "same_document" | "dom_update";
+  commits?: NavigationCommitRecord[];
+  expectation?: ExpectationSignal;
+  layout?: LayoutSignal;
+  signals?: ActionSettleSignals;
+}
+
+// Evidence handed back by the click settle barrier. The barrier reports the
+// popup tab it held open even when it returns partial or cancelled evidence.
+export type ClickCapture =
+  | { ok: true; newTabId: number | null; measurement: ClickMeasurement; finalUrl?: string }
+  | { ok: false; error: BrowserActionError };
+
 export type ClickResult =
-  | { ok: true; url: string; newTabId: number | null }
+  | { ok: true; url: string; newTabId: number | null; measurement?: ClickMeasurement }
   | { ok: false; error: BrowserActionError };
 
 export type TypeResult =

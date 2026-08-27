@@ -37,10 +37,14 @@ import { enforceUrlPolicy, redirectPolicyError } from "./url-policy";
 import { clickGroundedTarget } from "./actions/element";
 import { clearGroundedTarget, typeGroundedTarget } from "./actions/input";
 import { keypressGroundedTarget } from "./actions/keyboard";
+import { registerNewTabDetector } from "./actions/new-tab";
 import { scrollGroundedTarget, scrollToVisibleText } from "./actions/scroll";
 import { getSelectOptions, selectOption } from "./actions/select";
 import type {
+  ActionExpectationPolicy,
   ClearInputResult,
+  ClickCapture,
+  ClickMeasurement,
   ClickResult,
   GetSelectOptionsResult,
   KeypressInput,
@@ -52,6 +56,8 @@ import type {
   TypeResult,
 } from "./actions/types";
 import { DomActivityWatcher } from "./waits/dom";
+import { scanExpectation } from "./waits/expectation";
+import { LayoutStabilityWatcher } from "./waits/layout";
 import { NavigationWatcher } from "./waits/navigation";
 import { NetworkActivityWatcher } from "./waits/network";
 import {
@@ -59,10 +65,17 @@ import {
   type ActionSettleContext,
   type ActionSettleSignals,
   type CommitExpectation,
+  type ExpectationSignal,
   type NavigationCommitRecord,
   type SettleTimings,
 } from "./waits/types";
-import type { BrowserError, GroundedTarget, ObserveResult, TargetResolutionResult, UrlPolicyResult } from "./types";
+import type {
+  BrowserError,
+  GroundedTarget,
+  ObserveResult,
+  TargetResolutionResult,
+  UrlPolicyResult,
+} from "./types";
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
 const SCREENSHOT_QUALITY = 85;
@@ -252,13 +265,19 @@ export class BrowserPage {
     return this.runNavigation((page) => page.reload(this.navOptions()), { acceptsSameDocument: false }, settle);
   }
 
-  async click(target: GroundedTarget): Promise<ClickResult> {
-    return clickGroundedTarget(target, {
-      resolveTarget: (resolved) => this.resolveTarget(resolved),
-      onCreated: (listener) => this.deps.onCreated?.(listener) ?? (() => {}),
-      invalidate: () => this.snapshots.invalidate(this.tabId),
-      currentUrl: () => this.puppeteerPage?.url() ?? "",
-    });
+  async click(target: GroundedTarget, settle?: ActionSettleContext): Promise<ClickResult> {
+    const activation = this.prepareActivation(settle);
+    try {
+      return await clickGroundedTarget(target, {
+        resolveTarget: (resolved) => this.resolveTarget(resolved),
+        settle: () => activation.capture(),
+        finishActivation: () => activation.finish(),
+        invalidate: () => this.snapshots.invalidate(this.tabId),
+        currentUrl: () => this.puppeteerPage?.url() ?? "",
+      });
+    } finally {
+      activation.finish();
+    }
   }
 
   async type(target: GroundedTarget, text: string, settle?: ActionSettleContext): Promise<TypeResult> {
@@ -592,6 +611,147 @@ export class BrowserPage {
 
   private navOptions() {
     return { timeout: this.deps.timeoutMs, waitUntil: "load" as const };
+  }
+
+  // Arms click evidence before ElementHandle.click() fires: an opener-matched
+  // popup detector and, when a settle context exists, the navigation/DOM/
+  // layout machinery behind the bounded barrier. finish cleans up every armed
+  // piece on all paths; capture runs once, after the click resolves.
+  private prepareActivation(settle?: ActionSettleContext): {
+    capture: () => Promise<ClickCapture | null>;
+    finish: () => void;
+  } {
+    const detector = registerNewTabDetector(this.tabId, (listener) => {
+      const stop = this.deps.onCreated?.(listener);
+      return stop ?? (() => {});
+    });
+    if (!settle || !this.attached || !this.puppeteerPage || !this.identityTracker) {
+      let finished = false;
+      return {
+        capture: async () => {
+          finished = true;
+          detector.stop();
+          return { ok: true, newTabId: detector.observedTabId(), measurement: {} };
+        },
+        finish: () => {
+          if (!finished) {
+            finished = true;
+            detector.stop();
+          }
+        },
+      };
+    }
+
+    const page = this.puppeteerPage;
+    const tracker = this.identityTracker;
+    const timings = resolveSettleTimings(this.deps.settleTimings);
+    const capMs = settle.timeoutMs ?? this.deps.timeoutMs;
+    let finished = false;
+    let captured = false;
+    const navWatcherPromise = NavigationWatcher.arm(page, tracker, timings);
+    const layoutWatcher = new LayoutStabilityWatcher(page, timings);
+
+    const finish = (): void => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      detector.stop();
+      void navWatcherPromise
+        .then((watcher) => watcher.dispose())
+        .catch(() => {});
+    };
+
+    const capture = async (): Promise<ClickCapture | null> => {
+      if (captured || finished) {
+        return null;
+      }
+      captured = true;
+      try {
+        const navWatcher = await navWatcherPromise;
+        const startedAt = Date.now();
+        const left = (): number => Math.max(0, capMs - (Date.now() - startedAt));
+        // All evidence collectors run against the same overall budget, so a
+        // click that never navigates still finishes on its stability evidence
+        // instead of burning the whole cap waiting for a commit.
+        void navWatcher.waitForCommit({ acceptsSameDocument: true }, capMs, settle.signal);
+        const measurement: ClickMeasurement = {};
+
+        if (settle.expectation) {
+          measurement.expectation = await this.waitForExpectation(
+            page,
+            settle.expectation,
+            left(),
+            settle.signal,
+            timings.pollMs,
+          );
+        } else {
+          const [signals, layout] = await Promise.all([
+            navWatcher.waitForQuiet(left(), settle.signal),
+            layoutWatcher.waitForStable(left(), settle.signal),
+          ]);
+          measurement.signals = signals;
+          measurement.layout = layout;
+        }
+
+        // Outcome follows the strongest recorded hop regardless of which
+        // collector finished first.
+        const commits = navWatcher.allCommits();
+        if (commits.length > 0) {
+          measurement.commits = commits;
+          measurement.outcome = commits.some((record) => record.kind === "main_commit")
+            ? "navigation"
+            : "same_document";
+        } else {
+          measurement.outcome = "dom_update";
+        }
+
+        const finalUrl = page.url();
+        const redirect = redirectPolicyError(finalUrl);
+        if (redirect) {
+          this.snapshots.invalidate(this.tabId);
+          return { ok: false, error: redirect };
+        }
+        return { ok: true, newTabId: detector.observedTabId(), measurement, finalUrl };
+      } finally {
+        finish();
+      }
+    };
+
+    return { capture, finish };
+  }
+
+  // Polls role/name counts across live frames until the expectation is exactly
+  // satisfied or the budget ends. Ambiguous rounds keep polling in case the
+  // extra matches were transient; the last verdict wins at the deadline.
+  private async waitForExpectation(
+    page: Page,
+    expected: ActionExpectationPolicy,
+    budgetMs: number,
+    signal: AbortSignal | undefined,
+    pollMs: number,
+  ): Promise<ExpectationSignal> {
+    const deadline = Date.now() + budgetMs;
+    const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+    for (;;) {
+      if (signal?.aborted) {
+        return { status: "cancelled" };
+      }
+      const scan = await scanExpectation(page, expected);
+      if (expected.intent === "disappear" && scan.total === 0) {
+        return { status: "satisfied", intent: "disappear" };
+      }
+      if (expected.intent === "appear" && scan.total === 1) {
+        const scope = [...scan.scopes][0];
+        return { status: "satisfied", intent: "appear", ...(scope ? { scope } : {}) };
+      }
+      if (Date.now() >= deadline) {
+        return scan.total > 1
+          ? { status: "ambiguous", intent: expected.intent, matches: scan.total }
+          : { status: "unresolved", intent: expected.intent, timeoutMs: budgetMs };
+      }
+      await sleep(pollMs);
+    }
   }
 
   // Runs one navigation against armed watchers: commit signals stream from

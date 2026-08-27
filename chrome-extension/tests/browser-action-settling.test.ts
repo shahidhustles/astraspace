@@ -289,6 +289,12 @@ const VIEWPORT_WIDTH = 800;
 const VIEWPORT_HEIGHT = 600;
 const FIXTURE_PATH = join(import.meta.dir, "fixtures", "browser-action-waits.html");
 
+// The waits fixture embeds this page in its expectation frame.
+const CHILD_HTML = `<!doctype html><html><body>
+<div id="child-marker">Child ready</div>
+<div id="child-removable" role="status">Frame status</div>
+</body></html>`;
+
 function findChrome(): string | null {
   if (process.env.PUPPETEER_EXECUTABLE_PATH) {
     return process.env.PUPPETEER_EXECUTABLE_PATH;
@@ -342,6 +348,9 @@ describe("edit actions settle through the runtime boundary", () => {
       port: 0,
       fetch: async (request, upgradeServer) => {
         const url = new URL(request.url);
+        if (url.pathname === "/child.html") {
+          return new Response(CHILD_HTML, { headers: { "content-type": "text/html" } });
+        }
         if (url.pathname === "/ws") {
           const upgraded = upgradeServer.upgrade(request);
           return upgraded ? undefined : new Response("upgrade failed", { status: 500 });

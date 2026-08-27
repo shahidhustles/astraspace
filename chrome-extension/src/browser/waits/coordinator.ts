@@ -1,5 +1,6 @@
 import { dispatchBrowserAction, type BrowserActionRuntime } from "../actions/dispatcher";
 import type {
+  ActionExpectationPolicy,
   BrowserActionCancelReply,
   BrowserActionName,
   BrowserActionRequest,
@@ -18,6 +19,7 @@ export interface ActionWorkInput {
   name: BrowserActionName;
   requestedId?: ActionId | null;
   deadlineMs?: number | null;
+  expectation?: ActionExpectationPolicy | null;
   work: (signal: AbortSignal, budget: ActionDispatchBudget) => Promise<BrowserActionResult>;
 }
 
@@ -34,6 +36,7 @@ interface QueueEntry {
   readonly work: (signal: AbortSignal, budget: ActionDispatchBudget) => Promise<BrowserActionResult>;
   readonly resolveSettled: (result: BrowserActionResult) => void;
   readonly deadlineMs: number | null;
+  readonly expectation: ActionExpectationPolicy | null;
   readonly acceptedAt: number;
   deadlineTimer: ReturnType<typeof setTimeout> | null;
   state: "queued" | "dispatching";
@@ -77,6 +80,7 @@ export class TabActionCoordinator {
       work: input.work,
       resolveSettled,
       deadlineMs: input.deadlineMs ?? null,
+      expectation: input.expectation ?? null,
       acceptedAt: Date.now(),
       deadlineTimer: null,
       state: "queued",
@@ -222,7 +226,7 @@ export class TabActionCoordinator {
     const remaining =
       entry.deadlineMs === null ? null : Math.max(0, entry.deadlineMs - (Date.now() - entry.acceptedAt));
     try {
-      return entry.work(entry.controller.signal, { timeoutMs: remaining });
+      return entry.work(entry.controller.signal, { timeoutMs: remaining, expectation: entry.expectation });
     } catch (error) {
       return Promise.reject(error);
     }
@@ -283,6 +287,12 @@ export function enqueueActionRequest(
     name: request.action,
     requestedId: request.actionId,
     deadlineMs: request.wait?.timeoutMs ?? null,
-    work: (signal, budget) => dispatchBrowserAction(request, runtime, { signal, timeoutMs: budget.timeoutMs }),
+    expectation: request.wait?.expectation ?? null,
+    work: (signal, budget) =>
+      dispatchBrowserAction(request, runtime, {
+        signal,
+        timeoutMs: budget.timeoutMs,
+        expectation: budget.expectation,
+      }),
   });
 }

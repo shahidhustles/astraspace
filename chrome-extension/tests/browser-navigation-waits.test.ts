@@ -331,7 +331,10 @@ function findChrome(): string | null {
 
 const chromePath = findChrome();
 
-const CHILD_HTML = `<!doctype html><html><body><div id="child-marker">Child ready</div></body></html>`;
+const CHILD_HTML = `<!doctype html><html><body>
+<div id="child-marker">Child ready</div>
+<div id="child-removable" role="status">Frame status</div>
+</body></html>`;
 
 function fixtureServer(fixtureHtml: string, port = 0): ReturnType<typeof Bun.serve> {
   return Bun.serve({
@@ -533,8 +536,12 @@ describe("navigation actions settle through the runtime boundary", () => {
       expect(result.url).toBe(`${base}/`);
       expect(result.commits.length).toBeGreaterThanOrEqual(2);
       expect(result.commits[0].newUrl).toContain("entry=hop");
-      expect(result.commits[result.commits.length - 1].newUrl).toBe(`${base}/`);
-      expect(result.commits[result.commits.length - 1].oldUrl).toContain("entry=hop");
+      // Child frames (the fixture embeds one) may finish committing after
+      // their parent, so the final main-frame commit carries the URL proof.
+      const mainCommits = result.commits.filter((commit) => commit.kind === "main_commit");
+      expect(mainCommits.length).toBeGreaterThanOrEqual(2);
+      expect(mainCommits[mainCommits.length - 1].oldUrl).toContain("entry=hop");
+      expect(mainCommits[mainCommits.length - 1].newUrl).toBe(`${base}/`);
       expect(result.signals.network.status).toBe("quiet");
       expect(result.signals.dom.status).toBe("quiet");
     },

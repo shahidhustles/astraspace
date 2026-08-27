@@ -23,7 +23,7 @@ export interface BrowserActionRuntime {
   navigate: (url: string) => Promise<NavResult>;
   goBack: () => Promise<NavResult>;
   refresh: () => Promise<NavResult>;
-  click: (target: GroundedTarget) => Promise<ClickResult>;
+  click: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClickResult>;
   type: (target: GroundedTarget, text: string, settle?: ActionSettleContext) => Promise<TypeResult>;
   clearInput: (target: GroundedTarget, settle?: ActionSettleContext) => Promise<ClearInputResult>;
   keypress: (input: KeypressInput, settle?: ActionSettleContext) => Promise<KeypressResult>;
@@ -77,7 +77,7 @@ export async function dispatchBrowserAction(
       case "browser_refresh":
         return await navigationAction("browser_refresh", () => runtime.refresh(), runtime);
       case "browser_click":
-        return await clickAction(request.input, runtime);
+        return await clickAction(request.input, runtime, settle);
       case "browser_type":
         return await mutatingTargetAction(
           "browser_type",
@@ -145,18 +145,28 @@ async function navigationAction(
   };
 }
 
-async function clickAction(target: GroundedTarget, runtime: BrowserActionRuntime): Promise<BrowserActionResult> {
-  const result = await runtime.click(target);
+async function clickAction(
+  target: GroundedTarget,
+  runtime: BrowserActionRuntime,
+  settle?: ActionSettleContext,
+): Promise<BrowserActionResult> {
+  const result = await runtime.click(target, settle);
   if (!result.ok) {
     return { ok: false, action: "browser_click", tabId: target.tabId, error: result.error };
   }
+  const measured = result.measurement;
   return {
     ok: true,
     action: "browser_click",
     tabId: target.tabId,
     url: result.url,
     snapshotInvalidated: true,
-    data: { kind: "click", newTabId: result.newTabId },
+    ...(measured?.signals ? { signals: measured.signals } : {}),
+    data: {
+      kind: "click",
+      newTabId: result.newTabId,
+      ...(measured && Object.keys(measured).length > 0 ? { measured } : {}),
+    },
   };
 }
 
