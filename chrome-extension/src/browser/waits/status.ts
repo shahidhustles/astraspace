@@ -16,7 +16,7 @@ export function clickCompletionStatus(measurement: ClickMeasurement): ActionComp
   if (measurement.expectation) {
     const status = measurement.expectation.status;
     if (status === "satisfied") {
-      return "completed";
+      return measurement.signals ? signalsConfirm(measurement.signals) : "timed_out";
     }
     return status === "cancelled" ? "cancelled" : "timed_out";
   }
@@ -50,6 +50,9 @@ export function scrollCompletionStatus(stability?: ScrollStabilitySignal): Actio
 function signalsConfirm(signals?: ActionSettleSignals): ActionCompletionStatus {
   if (!signals) {
     return "completed";
+  }
+  if (signals.network.status === "cancelled" || signals.dom.status === "cancelled") {
+    return "cancelled";
   }
   const unsettled =
     signals.network.status === "activity_timeout" || signals.dom.status === "activity_timeout";

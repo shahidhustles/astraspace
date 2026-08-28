@@ -189,6 +189,7 @@ export class TabActionCoordinator {
           actionId: entry.id,
           status: "failed",
           elapsedMs: Date.now() - entry.acceptedAt,
+          dispatchStarted: !wasQueued,
         },
       });
       if (!wasQueued) {
@@ -202,6 +203,7 @@ export class TabActionCoordinator {
       actionId: entry.id,
       status: "cancelled",
       elapsedMs: Date.now() - entry.acceptedAt,
+      dispatchStarted: entry.state === "dispatching",
     };
   }
 
@@ -272,6 +274,7 @@ export class TabActionCoordinator {
             actionId: entry.id,
             status: "failed",
             elapsedMs: Date.now() - entry.acceptedAt,
+            dispatchStarted: true,
           },
         };
         break;
@@ -345,6 +348,7 @@ export class TabActionCoordinator {
         actionId: entry.id,
         status: "timed_out",
         elapsedMs: Date.now() - entry.acceptedAt,
+        dispatchStarted: false,
       },
     });
   }

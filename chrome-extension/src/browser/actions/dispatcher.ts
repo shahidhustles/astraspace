@@ -104,6 +104,7 @@ function withCompletion(result: BrowserActionResult, settle?: ActionSettleContex
     actionId: settle.actionId,
     status: deriveStatus(result),
     elapsedMs: Math.max(0, Date.now() - settle.startedAtMs),
+    dispatchStarted: true,
   };
   return { ...result, completion };
 }
@@ -236,6 +237,7 @@ async function navigationAction(
               actionId: settle.actionId,
               status: "timed_out" as const,
               elapsedMs: Math.max(0, Date.now() - settle.startedAtMs),
+              dispatchStarted: true,
             },
           }
         : {}),

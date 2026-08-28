@@ -23,10 +23,11 @@ function clickOnTab(tabId: number) {
 }
 
 // Dispatched envelopes carry completion evidence whose id and timing vary.
-const completes = (status: string) => ({
+const completes = (status: string, dispatchStarted = true) => ({
   actionId: expect.any(String),
   status,
   elapsedMs: expect.any(Number),
+  dispatchStarted,
 });
 
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
@@ -419,7 +420,7 @@ describe("per-tab action scheduling through the runtime", () => {
         message: "Browser action was cancelled before dispatch",
         dispatchStarted: false,
       },
-      completion: completes("cancelled"),
+      completion: completes("cancelled", false),
     });
     expect(clickCalls.length).toBe(1);
 
@@ -466,10 +467,13 @@ describe("per-tab action scheduling through the runtime", () => {
     expect(badTimeout).toMatchObject({ ok: false, error: { code: "invalid_action" } });
 
     const hugeTimeout = await handleBrowserRuntimeMessage(
-      { type: BROWSER_ACTION_MESSAGE, action: "browser_back", input: {}, wait: { timeoutMs: 999_999 } },
+      { type: BROWSER_ACTION_MESSAGE, action: "browser_back", input: {}, wait: { timeoutMs: 30_001 } },
       runtime,
     );
-    expect(hugeTimeout).toMatchObject({ ok: false, error: { code: "invalid_action" } });
+    expect(hugeTimeout).toMatchObject({
+      ok: false,
+      error: { code: "invalid_action", message: "wait requires an integer timeoutMs from 1 through 30000" },
+    });
 
     const badExpectation = await handleBrowserRuntimeMessage(
       {

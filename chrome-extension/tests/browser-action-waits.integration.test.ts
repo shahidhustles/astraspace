@@ -28,7 +28,7 @@ interface ResultView {
   url?: string;
   snapshotInvalidated?: boolean;
   error?: { code?: string; dispatchStarted?: boolean; url?: string };
-  completion?: { status?: string; elapsedMs?: number };
+  completion?: { status?: string; elapsedMs?: number; dispatchStarted?: boolean };
   signals?: { network?: SignalView; dom?: SignalView };
   data?: {
     newTabId?: number | null;
@@ -91,6 +91,7 @@ describe("action waits prove out through the real MV3 service worker", () => {
         r.routeClick?.data?.measured?.commits?.some((commit) => commit.kind === "same_document"),
       ).toBe(true);
       expect(r.routeClick?.url).toContain("#clicked");
+      expect(r.routeClick?.snapshotInvalidated).toBe(true);
       expect(r.routeClick?.completion?.status).toBe("completed");
 
       expect(r.idleClick?.ok).toBe(true);
@@ -120,6 +121,7 @@ describe("action waits prove out through the real MV3 service worker", () => {
       expect(navCommit?.oldUrl).toContain("/fixture?phase=primary");
       expect(navCommit?.newUrl).toContain("?step=clicked");
       expect(r.navClick?.url).toContain("?step=clicked");
+      expect(r.navClick?.snapshotInvalidated).toBe(true);
       expect(r.navClick?.completion?.status).toBe("completed");
     },
     90000,
@@ -142,6 +144,7 @@ describe("action waits prove out through the real MV3 service worker", () => {
       expect(r.suggestType?.signals?.network?.idleMs).toBeGreaterThan(0);
       expect(r.suggestType?.signals?.dom?.status).toBe("quiet");
       expect(r.suggestType?.signals?.dom?.watchedFrames).toBeGreaterThan(0);
+      expect(r.suggestType?.snapshotInvalidated).toBe(true);
       expect(r.suggestType?.completion?.status).toBe("completed");
 
       expect(r.failType?.ok).toBe(true);
@@ -187,6 +190,8 @@ describe("action waits prove out through the real MV3 service worker", () => {
         scope: "main_document",
       });
       expect(r.appearClick?.completion?.status).toBe("completed");
+      expect(r.appearClick?.data?.measured?.signals?.network?.status).toBe("quiet");
+      expect(r.appearClick?.data?.measured?.signals?.dom?.status).toBe("quiet");
 
       expect(r.disappearClick?.ok).toBe(true);
       expect(r.disappearClick?.data?.measured?.expectation).toMatchObject({
@@ -241,6 +246,7 @@ describe("action waits prove out through the real MV3 service worker", () => {
       expect(r.redirectTrap?.ok).toBe(false);
       expect(actionError(r.redirectTrap)).toBe("unsupported_redirect");
       expect(r.redirectTrap?.error?.url).toBe("about:blank");
+      expect(r.redirectTrap?.completion?.dispatchStarted).toBe(true);
     },
     60000,
   );

@@ -3,7 +3,7 @@ import type { ActionExpectationPolicy } from "../actions/types";
 export type ActionId = string & { readonly __brand: "ActionId" };
 
 // Upper bound accepted for a caller-supplied wait.timeoutMs on one action.
-export const MAX_WAIT_TIMEOUT_MS = 120_000;
+export const MAX_WAIT_TIMEOUT_MS = 30_000;
 
 // Queue deadline used when a request carries no explicit timeout.
 export const DEFAULT_QUEUE_DEADLINE_MS = 30_000;
@@ -55,6 +55,7 @@ export type DomSignal =
 export interface ActionSettleSignals {
   network: NetworkSignal;
   dom: DomSignal;
+  commits?: NavigationCommitRecord[];
 }
 
 // Time left on a caller-supplied wait timeout at dispatch start. Null means
@@ -87,6 +88,7 @@ export interface ActionCompletionEvidence {
   actionId: ActionId | null;
   status: ActionCompletionStatus;
   elapsedMs: number;
+  dispatchStarted: boolean;
 }
 
 // Why the coordinator or connection layer settled an action on its own.

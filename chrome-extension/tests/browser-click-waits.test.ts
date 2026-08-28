@@ -408,6 +408,8 @@ describe("click settlement through the runtime boundary", () => {
         intent: "appear",
         scope: "main_document",
       });
+      expect(result.measurement?.signals?.network.status).toBe("quiet");
+      expect(result.measurement?.signals?.dom.status).toBe("quiet");
       expect(await rawPage!.evaluate(() => document.querySelectorAll('#toast-host [role="dialog"]').length)).toBe(1);
       await assertNoLeaks("appear-main");
     },

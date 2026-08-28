@@ -726,7 +726,22 @@ describe("completion statuses derive from real evidence", () => {
     expect(clickCompletionStatus({ outcome: "same_document" })).toBe("completed");
     expect(clickCompletionStatus({ outcome: "dom_update", layout: { status: "stable", samples: 2, maxDeltaPx: 1 }, signals: quietBoth })).toBe("completed");
     expect(clickCompletionStatus({ outcome: "dom_update", layout: { status: "unstable", timeoutMs: 800, sampleCount: 5, maxDeltaPx: 30 } })).toBe("timed_out");
-    expect(clickCompletionStatus({ expectation: { status: "satisfied", intent: "appear", scope: "main_document" } })).toBe("completed");
+    expect(clickCompletionStatus({ expectation: { status: "satisfied", intent: "appear", scope: "main_document" } })).toBe("timed_out");
+    expect(
+      clickCompletionStatus({
+        expectation: { status: "satisfied", intent: "appear", scope: "main_document" },
+        signals: quietBoth,
+      }),
+    ).toBe("completed");
+    expect(
+      clickCompletionStatus({
+        expectation: { status: "satisfied", intent: "appear", scope: "main_document" },
+        signals: {
+          network: { status: "cancelled", ignoredRequests: 0 },
+          dom: { status: "quiet", idleMs: 400, watchedFrames: 1 },
+        },
+      }),
+    ).toBe("cancelled");
     expect(clickCompletionStatus({ expectation: { status: "unresolved", intent: "appear", timeoutMs: 700 } })).toBe("timed_out");
     expect(clickCompletionStatus({ expectation: { status: "cancelled", intent: "disappear" } })).toBe("cancelled");
     expect(clickCompletionStatus({})).toBe("completed");

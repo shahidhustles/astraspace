@@ -43,6 +43,7 @@ import { getSelectOptions, selectOption } from "./actions/select";
 import type {
   ActionCancelledError,
   ActionExpectationPolicy,
+  BrowserActionError,
   ClearInputResult,
   ClickCapture,
   ClickMeasurement,
@@ -83,6 +84,10 @@ import type {
 
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 10_000;
 const SCREENSHOT_QUALITY = 85;
+
+type SettledMutationResult =
+  | { ok: true; url: string; signals?: ActionSettleSignals }
+  | { ok: false; error: BrowserActionError };
 
 export interface PageDeps {
   connect: (options: Parameters<typeof connect>[0]) => Promise<Browser>;
@@ -299,36 +304,45 @@ export class BrowserPage {
   }
 
   async type(target: GroundedTarget, text: string, settle?: ActionSettleContext): Promise<TypeResult> {
-    return this.withSettlement(settle, (waitForSignals) =>
-      typeGroundedTarget(target, text, {
-        resolveTarget: (resolved) => this.resolveTarget(resolved),
-        invalidate: () => this.snapshots.invalidate(this.tabId),
-        currentUrl: () => this.puppeteerPage?.url() ?? "",
-        settle: waitForSignals ? () => waitForSignals() : undefined,
-      }),
+    return this.withSettlement(
+      settle,
+      (waitForSignals) =>
+        typeGroundedTarget(target, text, {
+          resolveTarget: (resolved) => this.resolveTarget(resolved),
+          invalidate: () => this.snapshots.invalidate(this.tabId),
+          currentUrl: () => this.puppeteerPage?.url() ?? "",
+          settle: waitForSignals ? () => waitForSignals() : undefined,
+        }),
+      (error) => ({ ok: false, error }),
     );
   }
 
   async clearInput(target: GroundedTarget, settle?: ActionSettleContext): Promise<ClearInputResult> {
-    return this.withSettlement(settle, (waitForSignals) =>
-      clearGroundedTarget(target, {
-        resolveTarget: (resolved) => this.resolveTarget(resolved),
-        invalidate: () => this.snapshots.invalidate(this.tabId),
-        currentUrl: () => this.puppeteerPage?.url() ?? "",
-        settle: waitForSignals ? () => waitForSignals() : undefined,
-      }),
+    return this.withSettlement(
+      settle,
+      (waitForSignals) =>
+        clearGroundedTarget(target, {
+          resolveTarget: (resolved) => this.resolveTarget(resolved),
+          invalidate: () => this.snapshots.invalidate(this.tabId),
+          currentUrl: () => this.puppeteerPage?.url() ?? "",
+          settle: waitForSignals ? () => waitForSignals() : undefined,
+        }),
+      (error) => ({ ok: false, error }),
     );
   }
 
   async keypress(input: KeypressInput, settle?: ActionSettleContext): Promise<KeypressResult> {
-    return this.withSettlement(settle, (waitForSignals) =>
-      keypressGroundedTarget(input, {
-        resolveTarget: (resolved) => this.resolveTarget(resolved),
-        invalidate: () => this.snapshots.invalidate(this.tabId),
-        keyboard: () => (this.attached ? (this.puppeteerPage?.keyboard ?? null) : null),
-        currentUrl: () => this.puppeteerPage?.url() ?? "",
-        settle: waitForSignals ? () => waitForSignals() : undefined,
-      }),
+    return this.withSettlement(
+      settle,
+      (waitForSignals) =>
+        keypressGroundedTarget(input, {
+          resolveTarget: (resolved) => this.resolveTarget(resolved),
+          invalidate: () => this.snapshots.invalidate(this.tabId),
+          keyboard: () => (this.attached ? (this.puppeteerPage?.keyboard ?? null) : null),
+          currentUrl: () => this.puppeteerPage?.url() ?? "",
+          settle: waitForSignals ? () => waitForSignals() : undefined,
+        }),
+      (error) => ({ ok: false, error }),
     );
   }
 
@@ -365,13 +379,16 @@ export class BrowserPage {
   }
 
   async selectOption(target: GroundedTarget, option: SelectOptionIdentity, settle?: ActionSettleContext): Promise<SelectOptionResult> {
-    return this.withSettlement(settle, (waitForSignals) =>
-      selectOption(target, option, {
-        resolveTarget: (resolved) => this.resolveTarget(resolved),
-        invalidate: () => this.snapshots.invalidate(this.tabId),
-        currentUrl: () => this.puppeteerPage?.url() ?? "",
-        settle: waitForSignals ? () => waitForSignals() : undefined,
-      }),
+    return this.withSettlement(
+      settle,
+      (waitForSignals) =>
+        selectOption(target, option, {
+          resolveTarget: (resolved) => this.resolveTarget(resolved),
+          invalidate: () => this.snapshots.invalidate(this.tabId),
+          currentUrl: () => this.puppeteerPage?.url() ?? "",
+          settle: waitForSignals ? () => waitForSignals() : undefined,
+        }),
+      (error) => ({ ok: false, error }),
     );
   }
 
@@ -384,29 +401,43 @@ export class BrowserPage {
     return result;
   }
 
-  // Arms network and DOM watchers before the edit runs so no page activity
-  // escapes measurement. Watchers are removed when the helper consumes its
-  // signals, or right here when the helper fails before settling.
-  private async withSettlement<R>(
+  // Arms navigation, network, and DOM watchers before the edit runs. The final
+  // URL policy check happens after quiet so redirects cannot escape it.
+  private async withSettlement<R extends SettledMutationResult>(
     settle: ActionSettleContext | undefined,
     run: (waitForSignals: (() => Promise<ActionSettleSignals>) | undefined) => Promise<R>,
+    fail: (error: BrowserActionError) => R,
   ): Promise<R> {
-    if (!settle || !this.attached || !this.puppeteerPage) {
+    if (!settle || !this.attached || !this.puppeteerPage || !this.identityTracker) {
       return run(undefined);
     }
     const timings = resolveSettleTimings(this.deps.settleTimings);
-    const pair = await this.armQuietPair(timings);
-    let consumed = false;
+    const page = this.puppeteerPage;
+    const watcher = await NavigationWatcher.arm(page, this.identityTracker, timings);
+    let monitoring = true;
+    const monitoredBrowser = this.browser;
+    if (monitoredBrowser && this.deps.isDebuggerAttached) {
+      void this.monitorDebuggerConnection(monitoredBrowser, timings.pollMs, () => monitoring);
+    }
     const waitForSignals = async (): Promise<ActionSettleSignals> => {
-      consumed = true;
-      return pair.collect(settle.timeoutMs, settle.signal);
+      const signals = await watcher.waitForQuiet(settle.timeoutMs ?? this.deps.timeoutMs, settle.signal);
+      const commits = boundedCommits(watcher.allCommits());
+      return commits.length > 0 ? { ...signals, commits } : signals;
     };
     try {
-      return await run(waitForSignals);
-    } finally {
-      if (!consumed) {
-        pair.disposeOnce();
+      const result = await run(waitForSignals);
+      if (!result.ok) {
+        return result;
       }
+      const redirect = redirectPolicyError(page.url());
+      if (redirect) {
+        this.snapshots.invalidate(this.tabId);
+        return fail(redirect);
+      }
+      return result;
+    } finally {
+      monitoring = false;
+      watcher.dispose();
     }
   }
 
@@ -782,6 +813,9 @@ export class BrowserPage {
             settle.signal,
             timings.pollMs,
           );
+          if (measurement.expectation.status === "satisfied") {
+            measurement.signals = await navWatcher.waitForQuiet(left(), settle.signal);
+          }
         } else {
           const [signals, layout] = await Promise.all([
             navWatcher.waitForQuiet(left(), settle.signal),

@@ -693,4 +693,60 @@ describe("edit actions settle through the runtime boundary", () => {
     },
     30_000,
   );
+
+  test(
+    "an edit-triggered navigation reports its commit and enforces the final URL policy",
+    async () => {
+      await freshPage();
+      await page!.evaluate(() => {
+        document.getElementById("suggest-input")?.addEventListener(
+          "input",
+          () => setTimeout(() => location.assign("?edit-navigation=1"), 0),
+          { once: true },
+        );
+      });
+      const navigatedState = await observe();
+      const navigated = await handleBrowserRuntimeMessage(
+        {
+          type: BROWSER_ACTION_MESSAGE,
+          action: "browser_type",
+          input: { target: targetFor(navigatedState, "Suggest input"), text: "n" },
+        },
+        runtime,
+      );
+
+      expect(navigated.ok).toBe(true);
+      if (!navigated.ok) {
+        throw new Error(JSON.stringify(navigated));
+      }
+      expect(navigated.url).toContain("edit-navigation=1");
+      expect(navigated.signals?.commits?.some((commit) => commit.kind === "main_commit")).toBe(true);
+
+      await freshPage();
+      await page!.evaluate(() => {
+        document.getElementById("suggest-input")?.addEventListener(
+          "input",
+          () => setTimeout(() => location.assign("about:blank"), 0),
+          { once: true },
+        );
+      });
+      const redirectedState = await observe();
+      const redirected = await handleBrowserRuntimeMessage(
+        {
+          type: BROWSER_ACTION_MESSAGE,
+          action: "browser_type",
+          input: { target: targetFor(redirectedState, "Suggest input"), text: "x" },
+        },
+        runtime,
+      );
+
+      expect(redirected.ok).toBe(false);
+      if (redirected.ok) {
+        throw new Error("unsupported edit redirect was reported as success");
+      }
+      expect(redirected.error.code).toBe("unsupported_redirect");
+      expect(redirected.completion?.dispatchStarted).toBe(true);
+    },
+    30_000,
+  );
 });
