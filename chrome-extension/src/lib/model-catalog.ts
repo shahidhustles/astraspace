@@ -6,7 +6,7 @@ export const MODEL_OPTIONS = [
     reasoningLabel: "Medium reasoning",
   },
   {
-    contextWindowTokens: undefined,
+    contextWindowTokens: 1_048_576,
     id: "muse-spark-1.2-contributor",
     label: "Muse Spark 1.2 Contributor",
     reasoningLabel: "Provider default",

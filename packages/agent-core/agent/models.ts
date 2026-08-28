@@ -22,6 +22,7 @@ export const models = {
   } satisfies AgentModelSelectionDefinition,
   "muse-spark-1.2-contributor": {
     model: zenOpenAI.responses("muse-spark-1.2-contributor"),
+    modelContextWindowTokens: 1_048_576,
   } satisfies AgentModelSelectionDefinition,
 } as const;
 
