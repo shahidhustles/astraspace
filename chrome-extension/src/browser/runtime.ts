@@ -14,12 +14,22 @@ import type { BrowserState, ObservationResult } from "./types";
 import { enqueueActionRequest, TabActionCoordinator } from "./waits/coordinator";
 import type { ActionId } from "./waits/types";
 import {
+  BROWSER_WORK_KIND_ACTION,
+  BROWSER_WORK_KIND_ACTION_CANCEL,
   BROWSER_WORK_KIND_OBSERVE,
+  isBrowserActionCancelWorkPayload,
+  isBrowserActionWorkPayload,
+  isReadOnlyBrowserAction,
+  type BrowserActionCancelWorkResultPayload,
+  type BrowserActionEvidence,
+  type BrowserActionOutcome,
+  type BrowserActionWorkResultPayload,
   type BrowserObserveResultPayload,
   type BrowserObserveState,
   type BrowserWorkRequest,
   type BrowserWorkResult,
 } from "@astra-space/browser-control-contract";
+import type { BrowserMutationLedger } from "./bridge-ledger";
 
 export const ATTACH_ACTIVE_TAB_MESSAGE = "browser.attach-active-tab";
 export const OBSERVE_SELECTED_TAB_MESSAGE = "browser.observe-selected-tab";
@@ -122,7 +132,7 @@ export function attachTabActionCoordinator(
   };
 }
 
-type ObserveContext = { observe: () => Promise<ObservationResult> };
+type BrokerRuntime = BrowserRuntime;
 
 function isObserveWorkRequest(request: BrowserWorkRequest): boolean {
   return request.kind === BROWSER_WORK_KIND_OBSERVE;
@@ -133,32 +143,203 @@ function isObserveWorkRequest(request: BrowserWorkRequest): boolean {
 // carries the typed observation error; transport failures stay out of here.
 export async function dispatchBrowserWorkRequest(
   request: BrowserWorkRequest,
-  context: ObserveContext,
+  context: BrokerRuntime,
+  ledger?: BrowserMutationLedger,
 ): Promise<BrowserWorkResult> {
-  if (!isObserveWorkRequest(request)) {
-    return {
-      requestId: request.requestId,
-      sessionId: request.sessionId,
-      status: "failed",
-      error: {
-        code: "malformed_envelope",
-        message: `Unknown browser work kind: ${request.kind}`,
-      },
-      completedAt: new Date().toISOString(),
-    };
+  if (isObserveWorkRequest(request)) {
+    return completedWorkResult(request, await observePayload(context));
+  }
+  if (request.kind === BROWSER_WORK_KIND_ACTION) {
+    return dispatchActionWork(request, context, ledger);
+  }
+  if (request.kind === BROWSER_WORK_KIND_ACTION_CANCEL) {
+    return dispatchCancelWork(request, context);
+  }
+  return failedWorkResult(request, "malformed_envelope", `Unknown browser work kind: ${request.kind}`);
+}
+
+async function dispatchActionWork(
+  request: BrowserWorkRequest,
+  context: BrokerRuntime,
+  ledger: BrowserMutationLedger | undefined,
+): Promise<BrowserWorkResult> {
+  if (!isBrowserActionWorkPayload(request.payload)) {
+    return failedWorkResult(request, "malformed_envelope", "Browser action payload is not valid");
+  }
+  const payload = request.payload;
+  const actionId = payload.actionId;
+  if (actionId === null) {
+    return failedWorkResult(request, "malformed_envelope", "Browser action payload needs an action id");
+  }
+  const mutating = !isReadOnlyBrowserAction(payload.action);
+  if (mutating && ledger !== undefined) {
+    const prior = await ledger.begin(actionId);
+    if (prior !== "dispatch") {
+      if (prior === "uncertain") {
+        return failedWorkResult(
+          request,
+          "action_replay_uncertain",
+          "This action was dispatched before the worker restarted. Observe before deciding what changed.",
+        );
+      }
+      return { ...prior, requestId: request.requestId, sessionId: request.sessionId };
+    }
   }
 
-  const payload = await observePayload(context);
+  const runtimeResult = await handleBrowserRuntimeMessage(
+    {
+      type: BROWSER_ACTION_MESSAGE,
+      action: payload.action,
+      input: payload.input,
+      actionId,
+      wait: actionWaitToRuntime(payload.wait),
+    },
+    context,
+  );
+  if (runtimeResult === null || !("action" in runtimeResult)) {
+    const failed = failedWorkResult(request, "broker_unavailable", "Browser action returned no result");
+    if (mutating && ledger !== undefined) await ledger.settle(actionId, failed);
+    return failed;
+  }
+
+  const action = actionOutcomeToWire(runtimeResult);
+  let observation: BrowserObserveState | null = null;
+  let observationError: { code: string; message: string } | null = null;
+  if (mutating && actionDispatched(runtimeResult)) {
+    const observed = await observePayload(context);
+    if (observed.ok) observation = observed.state;
+    else observationError = { code: "post_action_observation_failed", message: observed.error.message };
+  }
+  const resultPayload: BrowserActionWorkResultPayload = { action, observation, observationError };
+  const completed = completedWorkResult(request, resultPayload);
+  if (mutating && ledger !== undefined) {
+    await ledger.settle(
+      actionId,
+      completedWorkResult(request, {
+        action,
+        observation: null,
+        observationError: {
+          code: "replayed_action_result_requires_observation",
+          message: "This recorded action result was replayed. Observe before deciding what the page contains.",
+        },
+      }),
+    );
+  }
+  return completed;
+}
+
+function actionWaitToRuntime(
+  wait: import("@astra-space/browser-control-contract").BrowserActionWait | null,
+): Record<string, unknown> | undefined {
+  if (wait === null) return undefined;
+  const runtimeWait: Record<string, unknown> = {};
+  if (wait.timeoutMs !== null) runtimeWait.timeoutMs = wait.timeoutMs;
+  if (wait.expectation !== null) runtimeWait.expectation = wait.expectation;
+  return Object.keys(runtimeWait).length > 0 ? runtimeWait : undefined;
+}
+
+async function dispatchCancelWork(
+  request: BrowserWorkRequest,
+  context: BrokerRuntime,
+): Promise<BrowserWorkResult> {
+  if (!isBrowserActionCancelWorkPayload(request.payload)) {
+    return failedWorkResult(request, "malformed_envelope", "Browser action cancellation payload is not valid");
+  }
+  const reply = await handleBrowserRuntimeMessage(
+    { type: BROWSER_ACTION_CANCEL_MESSAGE, actionId: request.payload.actionId },
+    context,
+  );
+  if (reply === null || !("actionId" in reply) || "action" in reply) {
+    return failedWorkResult(request, "broker_unavailable", "Browser cancellation returned no result");
+  }
+  const payload: BrowserActionCancelWorkResultPayload = reply.ok
+    ? {
+        ok: true,
+        actionId: reply.actionId,
+        cancelled: reply.cancelled,
+        dispatchStarted: reply.dispatchStarted,
+      }
+    : {
+        ok: false,
+        actionId: reply.actionId,
+        error: { code: reply.error.code, message: reply.error.message },
+      };
+  return completedWorkResult(request, payload);
+}
+
+function actionDispatched(result: BrowserActionResult): boolean {
+  return result.ok || result.completion?.dispatchStarted === true;
+}
+
+function actionOutcomeToWire(result: BrowserActionResult): BrowserActionOutcome {
+  const evidence = completionToWire(result.completion);
+  if (result.ok) {
+    return {
+      ok: true,
+      action: result.action,
+      tabId: result.tabId,
+      url: result.url,
+      snapshotInvalidated: result.snapshotInvalidated,
+      data: { ...result.data },
+      ...(evidence ? { evidence } : {}),
+    };
+  }
+  const target = "target" in result.error ? { ...result.error.target } : undefined;
+  const dispatchStarted = "dispatchStarted" in result.error ? result.error.dispatchStarted : undefined;
+  return {
+    ok: false,
+    action: result.action,
+    tabId: result.tabId,
+    error: {
+      code: result.error.code,
+      message: result.error.message,
+      ...(target ? { target } : {}),
+      ...(dispatchStarted !== undefined ? { dispatchStarted } : {}),
+    },
+    ...(evidence ? { evidence } : {}),
+  };
+}
+
+function completionToWire(
+  completion: BrowserActionResult["completion"],
+): BrowserActionEvidence | undefined {
+  if (completion === undefined) return undefined;
+  return {
+    actionId: completion.actionId,
+    status: completion.status,
+    elapsedMs: completion.elapsedMs,
+    dispatchStarted: completion.dispatchStarted,
+  };
+}
+
+function completedWorkResult(
+  request: BrowserWorkRequest,
+  payload: Record<string, unknown> | BrowserObserveResultPayload | BrowserActionWorkResultPayload | BrowserActionCancelWorkResultPayload,
+): BrowserWorkResult {
   return {
     requestId: request.requestId,
     sessionId: request.sessionId,
     status: "completed",
-    payload: payload as Record<string, unknown>,
+    payload: { ...payload },
     completedAt: new Date().toISOString(),
   };
 }
 
-async function observePayload(context: ObserveContext): Promise<BrowserObserveResultPayload> {
+function failedWorkResult(
+  request: BrowserWorkRequest,
+  code: "malformed_envelope" | "broker_unavailable" | "action_replay_uncertain",
+  message: string,
+): BrowserWorkResult {
+  return {
+    requestId: request.requestId,
+    sessionId: request.sessionId,
+    status: "failed",
+    error: { code, message },
+    completedAt: new Date().toISOString(),
+  };
+}
+
+async function observePayload(context: { observe: () => Promise<ObservationResult> }): Promise<BrowserObserveResultPayload> {
   const result = await context.observe();
   if (!result.ok) {
     return { ok: false, error: { code: result.error.code, message: result.error.message } };

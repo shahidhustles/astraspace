@@ -23,7 +23,8 @@ export type BrowserControlErrorCode =
   | "unknown_request"
   | "lease_expired"
   | "broker_unavailable"
-  | "browser_unavailable";
+  | "browser_unavailable"
+  | "action_replay_uncertain";
 
 export interface BrowserControlError {
   code: BrowserControlErrorCode;
@@ -41,6 +42,7 @@ const BROWSER_CONTROL_ERROR_CODES: readonly BrowserControlErrorCode[] = [
   "lease_expired",
   "broker_unavailable",
   "browser_unavailable",
+  "action_replay_uncertain",
 ];
 
 export function isBrowserControlErrorCode(value: unknown): value is BrowserControlErrorCode {
@@ -116,6 +118,8 @@ export interface BrowserLeaseResult {
 }
 
 export const BROWSER_WORK_KIND_OBSERVE = "browser.observe";
+export const BROWSER_WORK_KIND_ACTION = "browser.action";
+export const BROWSER_WORK_KIND_ACTION_CANCEL = "browser.action.cancel";
 
 export function isConfiguredBrowserControlOrigin(
   origin: string | null | undefined,
@@ -401,6 +405,295 @@ export function isBrowserObserveResultPayload(
     (BROWSER_OBSERVATION_ERROR_CODES as readonly string[]).includes(
       value.error.code as string,
     ) &&
+    typeof value.error.message === "string"
+  );
+}
+
+export type BrowserActionName =
+  | "browser_navigate"
+  | "browser_back"
+  | "browser_refresh"
+  | "browser_click"
+  | "browser_type"
+  | "browser_clear_input"
+  | "browser_keypress"
+  | "browser_scroll"
+  | "browser_scroll_to_text"
+  | "browser_get_select_options"
+  | "browser_select_option"
+  | "browser_open_tab"
+  | "browser_switch_tab"
+  | "browser_close_tab";
+
+const BROWSER_ACTION_NAMES: readonly BrowserActionName[] = [
+  "browser_navigate",
+  "browser_back",
+  "browser_refresh",
+  "browser_click",
+  "browser_type",
+  "browser_clear_input",
+  "browser_keypress",
+  "browser_scroll",
+  "browser_scroll_to_text",
+  "browser_get_select_options",
+  "browser_select_option",
+  "browser_open_tab",
+  "browser_switch_tab",
+  "browser_close_tab",
+];
+
+export function isBrowserActionName(value: unknown): value is BrowserActionName {
+  return (
+    typeof value === "string" &&
+    (BROWSER_ACTION_NAMES as readonly string[]).includes(value)
+  );
+}
+
+// The only action that never changes the page, so it never enters the
+// mutation ledger and never forces a fresh observation.
+export function isReadOnlyBrowserAction(action: BrowserActionName): boolean {
+  return action === "browser_get_select_options";
+}
+
+export interface BrowserActionTargetRef {
+  tabId: number;
+  snapshotId: string;
+  ref: number;
+}
+
+export type BrowserActionFailureCode =
+  | BrowserObservationErrorCode
+  | "invalid_action"
+  | "action_failed"
+  | "action_cancelled"
+  | "action_wait_timeout"
+  | "disabled_target"
+  | "read_only_target"
+  | "not_interactable"
+  | "file_upload_required"
+  | "text_not_found"
+  | "not_native_select"
+  | "option_not_found"
+  | "option_disabled"
+  | "ambiguous_option"
+  | "stale_ref"
+  | "target_not_found"
+  | "ambiguous_ref";
+
+const BROWSER_ACTION_FAILURE_CODES: readonly BrowserActionFailureCode[] = [
+  ...BROWSER_OBSERVATION_ERROR_CODES,
+  "invalid_action",
+  "action_failed",
+  "action_cancelled",
+  "action_wait_timeout",
+  "disabled_target",
+  "read_only_target",
+  "not_interactable",
+  "file_upload_required",
+  "text_not_found",
+  "not_native_select",
+  "option_not_found",
+  "option_disabled",
+  "ambiguous_option",
+  "stale_ref",
+  "target_not_found",
+  "ambiguous_ref",
+];
+
+export function isBrowserActionFailureCode(value: unknown): value is BrowserActionFailureCode {
+  return (
+    typeof value === "string" &&
+    (BROWSER_ACTION_FAILURE_CODES as readonly string[]).includes(value)
+  );
+}
+
+// One flat JSON-safe failure shape. Element failures carry the target that
+// failed; cancellation failures carry whether dispatch had started.
+export interface BrowserActionFailure {
+  code: BrowserActionFailureCode;
+  message: string;
+  target?: BrowserActionTargetRef;
+  dispatchStarted?: boolean;
+}
+
+export interface BrowserActionEvidence {
+  actionId: string | null;
+  status: "completed" | "timed_out" | "cancelled" | "failed";
+  elapsedMs: number;
+  dispatchStarted: boolean;
+}
+
+// Bounded per-action result data (kind, positions, option records, tab
+// lists, completion measurements). The extension bounds every page-derived
+// string before this crosses the wire.
+export type BrowserActionData = Record<string, unknown>;
+
+export type BrowserActionOutcome =
+  | {
+      ok: true;
+      action: BrowserActionName;
+      tabId: number;
+      url: string;
+      snapshotInvalidated: boolean;
+      data: BrowserActionData;
+      evidence?: BrowserActionEvidence;
+    }
+  | {
+      ok: false;
+      action: BrowserActionName | null;
+      tabId: number | null;
+      error: BrowserActionFailure;
+      evidence?: BrowserActionEvidence;
+    };
+
+export interface BrowserActionWait {
+  timeoutMs: number | null;
+  expectation: { intent: "appear" | "disappear"; role: string; name: string } | null;
+}
+
+// Payload inside a browser.action work request. `actionId` is the Eve call
+// id mapped to the browser action; the model never supplies it.
+export interface BrowserActionWorkPayload {
+  action: BrowserActionName;
+  input: Record<string, unknown>;
+  actionId: string | null;
+  wait: BrowserActionWait | null;
+}
+
+// Payload inside a completed browser.action work result. Page-changing
+// actions carry a fresh observation; a failed re-observation keeps the
+// action outcome and reports observationError instead.
+export interface BrowserActionWorkResultPayload {
+  action: BrowserActionOutcome;
+  observation: BrowserObserveState | null;
+  observationError: { code: string; message: string } | null;
+}
+
+export interface BrowserActionCancelWorkPayload {
+  actionId: string;
+}
+
+export type BrowserActionCancelWorkResultPayload =
+  | { ok: true; actionId: string; cancelled: boolean; dispatchStarted: boolean }
+  | { ok: false; actionId: string | null; error: { code: string; message: string } };
+
+function isBrowserActionTargetRef(value: unknown): value is BrowserActionTargetRef {
+  return (
+    isRecord(value) &&
+    typeof value.tabId === "number" &&
+    typeof value.snapshotId === "string" &&
+    value.snapshotId.length > 0 &&
+    typeof value.ref === "number"
+  );
+}
+
+function isBrowserActionFailure(value: unknown): value is BrowserActionFailure {
+  if (!isRecord(value)) return false;
+  if (!isBrowserActionFailureCode(value.code) || typeof value.message !== "string") {
+    return false;
+  }
+  if (value.target !== undefined && !isBrowserActionTargetRef(value.target)) return false;
+  if (value.dispatchStarted !== undefined && typeof value.dispatchStarted !== "boolean") {
+    return false;
+  }
+  return true;
+}
+
+function isBrowserActionEvidence(value: unknown): value is BrowserActionEvidence {
+  return (
+    isRecord(value) &&
+    (value.actionId === null || typeof value.actionId === "string") &&
+    (value.status === "completed" ||
+      value.status === "timed_out" ||
+      value.status === "cancelled" ||
+      value.status === "failed") &&
+    typeof value.elapsedMs === "number" &&
+    typeof value.dispatchStarted === "boolean"
+  );
+}
+
+function isBrowserActionOutcome(value: unknown): value is BrowserActionOutcome {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  if (value.evidence !== undefined && !isBrowserActionEvidence(value.evidence)) {
+    return false;
+  }
+  if (value.ok) {
+    return (
+      isBrowserActionName(value.action) &&
+      typeof value.tabId === "number" &&
+      typeof value.url === "string" &&
+      typeof value.snapshotInvalidated === "boolean" &&
+      isRecord(value.data)
+    );
+  }
+  return (
+    (value.action === null || isBrowserActionName(value.action)) &&
+    (value.tabId === null || typeof value.tabId === "number") &&
+    isBrowserActionFailure(value.error)
+  );
+}
+
+function isBrowserActionWait(value: unknown): value is BrowserActionWait {
+  if (!isRecord(value)) return false;
+  if (value.timeoutMs !== null && typeof value.timeoutMs !== "number") return false;
+  if (value.expectation === null) return true;
+  return (
+    isRecord(value.expectation) &&
+    (value.expectation.intent === "appear" || value.expectation.intent === "disappear") &&
+    typeof value.expectation.role === "string" &&
+    typeof value.expectation.name === "string"
+  );
+}
+
+export function isBrowserActionWorkPayload(value: unknown): value is BrowserActionWorkPayload {
+  return (
+    isRecord(value) &&
+    isBrowserActionName(value.action) &&
+    isRecord(value.input) &&
+    (value.actionId === null || (typeof value.actionId === "string" && value.actionId.length > 0)) &&
+    (value.wait === null || isBrowserActionWait(value.wait))
+  );
+}
+
+export function isBrowserActionWorkResultPayload(
+  value: unknown,
+): value is BrowserActionWorkResultPayload {
+  if (
+    !isRecord(value) ||
+    !isBrowserActionOutcome(value.action) ||
+    !(value.observation === null || isBrowserObserveState(value.observation))
+  ) {
+    return false;
+  }
+  if (value.observationError === null) return true;
+  return (
+    isRecord(value.observationError) &&
+    typeof value.observationError.code === "string" &&
+    typeof value.observationError.message === "string"
+  );
+}
+
+export function isBrowserActionCancelWorkPayload(
+  value: unknown,
+): value is BrowserActionCancelWorkPayload {
+  return isRecord(value) && typeof value.actionId === "string" && value.actionId.length > 0;
+}
+
+export function isBrowserActionCancelWorkResultPayload(
+  value: unknown,
+): value is BrowserActionCancelWorkResultPayload {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  if (value.ok) {
+    return (
+      typeof value.actionId === "string" &&
+      typeof value.cancelled === "boolean" &&
+      typeof value.dispatchStarted === "boolean"
+    );
+  }
+  return (
+    (value.actionId === null || typeof value.actionId === "string") &&
+    isRecord(value.error) &&
+    typeof value.error.code === "string" &&
     typeof value.error.message === "string"
   );
 }

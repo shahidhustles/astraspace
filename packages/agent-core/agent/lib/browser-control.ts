@@ -1,11 +1,17 @@
 import {
+  BROWSER_WORK_KIND_ACTION,
+  BROWSER_WORK_KIND_ACTION_CANCEL,
   BROWSER_WORK_KIND_OBSERVE,
+  type BrowserActionName,
+  type BrowserActionWait,
+  type BrowserActionWorkResultPayload,
   type BrowserControlErrorCode,
   type BrowserObserveRef,
   type BrowserObserveState,
   type BrowserObservationErrorCode,
   type BrowserWorkResult,
   isBrowserObserveResultPayload,
+  isBrowserActionWorkResultPayload,
   jsonByteSize,
 } from "@astra-space/browser-control-contract";
 import type { ToolModelOutputPart } from "eve/tools";
@@ -46,6 +52,94 @@ export interface ObserveSelectedPageInput {
   abortSignal?: AbortSignal;
   bindWaitMs?: number;
   resultTimeoutMs?: number;
+}
+
+export interface BrowserActionToolContext {
+  session: { id: string; turn: { id: string } };
+  callId: string;
+  abortSignal: AbortSignal;
+}
+
+export interface BrowserActionToolInput {
+  action: BrowserActionName;
+  input: Record<string, unknown>;
+  wait?: BrowserActionWait;
+  ctx: BrowserActionToolContext;
+  broker?: BrowserBroker;
+}
+
+export interface BrowserActionOutput extends BrowserActionWorkResultPayload {
+  ok: true;
+}
+
+export async function runBrowserAction(input: BrowserActionToolInput): Promise<BrowserActionOutput> {
+  const broker = input.broker ?? BrowserBroker.shared();
+  if (!(await waitForSessionConnection(broker, input.ctx.session.id, BIND_WAIT_MS))) {
+    throw new BrowserObserveError("browser_unavailable", "No extension is bound to this Eve session");
+  }
+
+  const request = await wrapBrokerFailure(() =>
+    broker.enqueue(input.ctx.session.id, {
+      sessionId: input.ctx.session.id,
+      turnId: input.ctx.session.turn.id,
+      callId: input.ctx.callId,
+      kind: BROWSER_WORK_KIND_ACTION,
+      payload: {
+        action: input.action,
+        input: input.input,
+        actionId: input.ctx.callId,
+        wait: input.wait ?? null,
+      },
+    }),
+  );
+
+  const result = await raceAbort(
+    () => wrapBrokerFailure(() => broker.waitForResult(input.ctx.session.id, request.requestId, RESULT_TIMEOUT_MS)),
+    input.ctx.abortSignal,
+    async () => {
+      await broker.enqueue(input.ctx.session.id, {
+        sessionId: input.ctx.session.id,
+        turnId: input.ctx.session.turn.id,
+        callId: `${input.ctx.callId}:cancel`,
+        kind: BROWSER_WORK_KIND_ACTION_CANCEL,
+        payload: { actionId: input.ctx.callId },
+      });
+      await broker.cancel(input.ctx.session.id, request.requestId);
+    },
+  );
+
+  if (result.status === "cancelled") throw cancelledError();
+  if (result.status === "failed") {
+    throw new BrowserObserveError(result.error.code, result.error.message);
+  }
+  if (!isBrowserActionWorkResultPayload(result.payload)) {
+    throw new BrowserObserveError("malformed_envelope", "The browser action result did not match the protocol");
+  }
+  return { ok: true, ...result.payload };
+}
+
+export function browserActionModelParts(output: BrowserActionOutput): ToolModelOutputPart[] {
+  const action = output.action;
+  const evidence = action.evidence;
+  const lines = [
+    action.ok
+      ? `${action.action} ${evidence?.status ?? "completed"} on tab ${action.tabId} at ${action.url}`
+      : `${action.action ?? "browser action"} failed (${action.error.code}): ${action.error.message}`,
+    evidence
+      ? `Dispatch started: ${evidence.dispatchStarted}; elapsed: ${evidence.elapsedMs}ms; actionId: ${evidence.actionId ?? "none"}`
+      : null,
+    output.observationError
+      ? `Post-action observation failed (${output.observationError.code}): ${output.observationError.message}. Observe again before deciding what changed.`
+      : null,
+  ].filter((line): line is string => line !== null);
+
+  if (output.observation === null) return [toolOutputPart.text(lines.join("\n"))];
+  const observeParts = browserObserveModelParts({
+    ok: true,
+    observation: output.observation,
+    screenshot: { data: output.observation.screenshot.data, mediaType: "image/jpeg" },
+  });
+  return [toolOutputPart.text(lines.join("\n")), ...observeParts];
 }
 
 export async function observeSelectedPage(

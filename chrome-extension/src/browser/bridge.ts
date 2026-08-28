@@ -90,6 +90,7 @@ export class BrowserControlBridge {
   private loopEpoch = 0;
   private pollController: AbortController | null = null;
   private loopTask: Promise<void> | null = null;
+  private readonly activeRequests = new Set<Promise<void>>();
 
   constructor(host: string = EVE_HOST) {
     this.host = host;
@@ -149,6 +150,7 @@ export class BrowserControlBridge {
     const task = this.loopTask;
     this.loopTask = null;
     await task?.catch(() => {});
+    await Promise.allSettled([...this.activeRequests]);
   }
 
   private startLoop(connection: StoredBrowserConnection): void {
@@ -172,8 +174,12 @@ export class BrowserControlBridge {
         const lease = await this.leaseOnce(connection);
         if (!this.isLive(connection, epoch)) return;
         for (const request of lease.requests) {
-          await this.processRequest(connection, request);
-          if (!this.isLive(connection, epoch)) return;
+          const task = this.processRequest(connection, request)
+            .catch((error) => console.info("browser-bridge request failed", error))
+            .finally(() => {
+              this.activeRequests.delete(task);
+            });
+          this.activeRequests.add(task);
         }
         backoffMs = MIN_BACKOFF_MS;
       } catch (error) {

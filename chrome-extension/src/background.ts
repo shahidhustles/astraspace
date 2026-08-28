@@ -1,5 +1,6 @@
 import { BrowserContext } from "./browser/context";
 import { BrowserControlBridge } from "./browser/bridge";
+import { BrowserMutationLedger } from "./browser/bridge-ledger";
 import {
   dispatchBrowserWorkRequest,
   handleBrowserRuntimeMessage,
@@ -15,9 +16,10 @@ export const browserContext = new BrowserContext({
 });
 
 export const browserControlBridge = new BrowserControlBridge();
+const browserMutationLedger = new BrowserMutationLedger();
 
 browserControlBridge.setDispatcher((request) =>
-  dispatchBrowserWorkRequest(request, browserContext),
+  dispatchBrowserWorkRequest(request, browserContext, browserMutationLedger),
 );
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
