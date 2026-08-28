@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(bunx tsc -p packages/agent-core/tsconfig.json --noEmit 2 >& 1)",
+      "Shell(bunx tsc -p chrome-extension/tsconfig.json --noEmit 2 >& 1)",
+      "Shell(bun:*)",
+      "Shell(bunx tsc --noEmit 2 >& 1)",
+      "Shell(git:*)",
+      "Shell(grep:*)",
+      "Shell(bunx tsc -p packages/agent-core/tsconfig.json --noEmit)",
+      "Shell(bunx tsc -p chrome-extension/tsconfig.json --noEmit)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
