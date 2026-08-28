@@ -53,6 +53,16 @@ const FIXTURE_MULTILINE = `<!doctype html>
   </body>
 </html>`;
 
+const FIXTURE_LABELLED_INPUT = `<!doctype html>
+<html>
+  <head><title>Resolution fixture</title></head>
+  <body>
+    <div id="question">Hours studied this week</div>
+    <span id="required">*</span>
+    <input id="hours" type="text" aria-labelledby="question required">
+  </body>
+</html>`;
+
 const LAYOUTS: Record<string, Record<string, { x: number; y: number; width: number; height: number }>> = {
   pair: {
     save: { x: 8, y: 8, width: 90, height: 28 },
@@ -67,6 +77,11 @@ const LAYOUTS: Record<string, Record<string, { x: number; y: number; width: numb
   },
   multiline: {
     save: { x: 8, y: 8, width: 90, height: 28 },
+  },
+  labelledInput: {
+    question: { x: 8, y: 8, width: 200, height: 24 },
+    required: { x: 212, y: 8, width: 8, height: 24 },
+    hours: { x: 8, y: 40, width: 200, height: 28 },
   },
 };
 
@@ -141,8 +156,14 @@ function installXPath(win: Window): void {
   };
 }
 
-function fixtureWindow(name: "pair" | "single" | "twins" | "multiline"): Window {
-  const fixtures = { pair: FIXTURE_PAIR, single: FIXTURE_SINGLE, twins: FIXTURE_TWINS, multiline: FIXTURE_MULTILINE };
+function fixtureWindow(name: "pair" | "single" | "twins" | "multiline" | "labelledInput"): Window {
+  const fixtures = {
+    pair: FIXTURE_PAIR,
+    single: FIXTURE_SINGLE,
+    twins: FIXTURE_TWINS,
+    multiline: FIXTURE_MULTILINE,
+    labelledInput: FIXTURE_LABELLED_INPUT,
+  };
   const win = new Window({
     url: "https://fixture.test/",
     innerWidth: VIEWPORT_WIDTH,
@@ -896,6 +917,21 @@ describe("target resolution", () => {
     const result = expectResolved(await resolveTarget(ctx, store, target(snapshot, 1)));
 
     expect(await result.evaluate((el) => (el as Element).id)).toBe("save");
+  });
+
+  test("accepts the recorded DOM name when the live AX name uses an equivalent required label", async () => {
+    const win = fixtureWindow("labelledInput");
+    const store = new SnapshotStore({ createUuid: sequencedUuids() });
+    const { ctx, main } = await resolutionContext(win);
+    const snapshot = commitRendered(store, captureRendered(win));
+    main.accessibility.snapshot = async () => ({
+      role: "textbox",
+      name: "Hours studied this week Required question",
+    });
+
+    const result = expectResolved(await resolveTarget(ctx, store, target(snapshot, 1)));
+
+    expect(await result.evaluate((el) => (el as Element).id)).toBe("hours");
   });
 
   test("a control inside a shadow root resolves through its recorded shadow scope", async () => {

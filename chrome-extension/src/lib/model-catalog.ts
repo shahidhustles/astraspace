@@ -3,7 +3,7 @@ export const MODEL_OPTIONS = [
     contextWindowTokens: 1_048_576,
     id: "muse-spark-1.2-contributor-free",
     label: "Muse Spark 1.2 Contributor Free",
-    reasoningLabel: "Extra-high reasoning",
+    reasoningLabel: "Non-reasoning model",
   },
   {
     contextWindowTokens: 1_050_000,

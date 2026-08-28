@@ -229,9 +229,64 @@ export async function verifyCandidate(
     return false;
   }
   if (grounding.name !== null && ax.name !== grounding.name) {
-    return false;
+    const domName = await element.evaluate(domAccessibleName);
+    if (domName !== grounding.name) {
+      return false;
+    }
   }
   return true;
+}
+
+function domAccessibleName(node: Node): string | null {
+  if (!(node instanceof Element)) {
+    return null;
+  }
+  const collapse = (value: string): string => value.replace(/\s+/g, " ").trim();
+  const textOf = (root: Element): string => {
+    const parts: string[] = [];
+    const walk = (current: Node): void => {
+      if (current.nodeType === 3) {
+        const text = collapse(current.textContent ?? "");
+        if (text) parts.push(text);
+        return;
+      }
+      if (current.nodeType !== 1) return;
+      const element = current as Element;
+      if (["script", "style", "svg", "template", "noscript"].includes(element.tagName.toLowerCase())) return;
+      for (const child of Array.from(element.childNodes)) walk(child);
+    };
+    for (const child of Array.from(root.childNodes)) walk(child);
+    return parts.join(" ").trim();
+  };
+
+  const labelledBy = node.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const labelledText = labelledBy
+      .split(/\s+/)
+      .map((id) => node.ownerDocument.getElementById(id))
+      .filter((label): label is HTMLElement => label !== null)
+      .map(textOf)
+      .filter(Boolean)
+      .join(" ");
+    if (labelledText) return labelledText;
+  }
+  const ariaLabel = node.getAttribute("aria-label");
+  if (ariaLabel?.trim()) return collapse(ariaLabel);
+
+  const id = node.id;
+  const explicitLabel = id
+    ? Array.from(node.ownerDocument.querySelectorAll("label")).find((label) => label.getAttribute("for") === id)
+    : undefined;
+  const label = explicitLabel ?? node.closest("label");
+  if (label) {
+    const labelText = textOf(label);
+    if (labelText) return labelText;
+  }
+
+  const title = node.getAttribute("title");
+  if (title?.trim()) return collapse(title);
+  const ownText = textOf(node);
+  return ownText || null;
 }
 
 async function locateByBackendNodeId(frame: Frame, backendNodeId: number): Promise<ElementHandle | null> {
