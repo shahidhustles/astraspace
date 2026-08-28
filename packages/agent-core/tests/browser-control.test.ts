@@ -3,6 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  BROWSER_WORK_KIND_ACTION,
+  BROWSER_WORK_KIND_ACTION_CANCEL,
   BROWSER_WORK_KIND_OBSERVE,
   type BrowserObserveState,
   type BrowserWorkRequest,
@@ -13,6 +15,7 @@ import {
   BrowserObserveError,
   browserObserveModelParts,
   observeSelectedPage,
+  runBrowserAction,
 } from "../agent/lib/browser-control";
 
 const JPEG_STUB = "/9j/fixture-jpeg-base64";
@@ -282,5 +285,32 @@ describe("BrowserObserveError", () => {
     const error = new BrowserObserveError("unsupported_page", "This page cannot be controlled");
     expect(error.code).toBe("unsupported_page");
     expect(error.message).toBe("browser_observe failed (unsupported_page): This page cannot be controlled");
+  });
+});
+
+describe("runBrowserAction", () => {
+  test("sends browser cancellation when the result deadline expires", async () => {
+    const harness = await createHarness();
+    const action = runBrowserAction({
+      action: "browser_click",
+      input: { tabId: 7, snapshotId: "snapshot-1", ref: 1 },
+      ctx: {
+        session: { id: SESSION_ID, turn: { id: "turn-1" } },
+        callId: "call-timeout",
+        abortSignal: new AbortController().signal,
+      },
+      broker: harness.broker,
+      resultTimeoutMs: 60,
+    });
+
+    const leasedAction = await harness.broker.lease(harness.token, 1_000);
+    expect(leasedAction.requests[0]?.kind).toBe(BROWSER_WORK_KIND_ACTION);
+    await expect(action).rejects.toMatchObject({ code: "lease_expired" });
+
+    const leasedCancel = await harness.broker.lease(harness.token, 1_000);
+    expect(leasedCancel.requests[0]).toMatchObject({
+      kind: BROWSER_WORK_KIND_ACTION_CANCEL,
+      payload: { actionId: "call-timeout" },
+    });
   });
 });

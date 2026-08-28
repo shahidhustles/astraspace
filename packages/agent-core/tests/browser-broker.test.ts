@@ -257,6 +257,17 @@ describe("BrowserBroker results", () => {
 });
 
 describe("BrowserBroker lifecycle and isolation", () => {
+  test("default broker instances share one stable application root", async () => {
+    const left = new BrowserBroker({ sweep: false });
+    const right = new BrowserBroker({ sweep: false });
+    try {
+      expect(left.instanceId).toBe(right.instanceId);
+    } finally {
+      await left.close();
+      await right.close();
+    }
+  });
+
   test("brokers with different roots do not share connections or requests", async () => {
     const left = await createBroker();
     const right = await createBroker();
@@ -271,6 +282,22 @@ describe("BrowserBroker lifecycle and isolation", () => {
     const rightBind = await right.broker.bind("ses_1");
     const rightLease = await right.broker.lease(rightBind.connectionToken, 0);
     expect(rightLease.requests).toHaveLength(0);
+  });
+
+  test("does not treat an abandoned persisted connection as a live worker", async () => {
+    let clock = 1_000_000;
+    const { broker } = await createBroker({
+      now: () => clock,
+      timings: { connectionStaleMs: 1_000 },
+    });
+    const bind = await broker.bind("ses_1");
+    expect(await broker.hasConnectionForSession("ses_1")).toBe(true);
+
+    clock += 2_000;
+    expect(await broker.hasConnectionForSession("ses_1")).toBe(false);
+
+    await broker.lease(bind.connectionToken, 0);
+    expect(await broker.hasConnectionForSession("ses_1")).toBe(true);
   });
 
   test("sweep enforces retention and pending deadlines with bounded files", async () => {

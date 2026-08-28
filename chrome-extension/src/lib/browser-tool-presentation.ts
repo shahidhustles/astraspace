@@ -60,13 +60,14 @@ export function presentBrowserToolPart(
   }
   if (part.state === "output-error") {
     const errorCode = errorCodeFromText(part.errorText);
+    const label = errorLabel(errorCode);
     return {
       defaultOpen: true,
-      errorText: [part.errorText, recoveryText({ errorCode, label: "failed" })]
+      errorText: [part.errorText, recoveryText({ errorCode, label })]
         .filter(isNonNull)
         .join("\n\n"),
       input,
-      label: "failed",
+      label,
       state: part.state,
       title,
     };
@@ -224,8 +225,14 @@ function recoveryText({
 }
 
 function errorCodeFromText(errorText: string): string | null {
-  const match = /\b(action_replay_uncertain|browser_unavailable|stale_ref|target_not_found|ambiguous_ref|action_cancelled)\b/.exec(errorText);
+  const match = /\b(action_replay_uncertain|browser_unavailable|stale_ref|target_not_found|ambiguous_ref|action_cancelled|cancelled|lease_expired)\b/.exec(errorText);
   return match?.[1] ?? null;
+}
+
+function errorLabel(errorCode: string | null): BrowserToolLabel {
+  if (errorCode === "cancelled" || errorCode === "action_cancelled") return "cancelled";
+  if (errorCode === "lease_expired") return "timed out";
+  return "failed";
 }
 
 function toSafeRecord(value: unknown): Record<string, unknown> {

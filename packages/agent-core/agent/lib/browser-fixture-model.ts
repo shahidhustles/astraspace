@@ -6,22 +6,27 @@ export const FIXTURE_MODEL_ID = "browser-observe-fixture";
 const OBSERVE_PROMPT_MARKER = "Inspect the current page";
 
 export function browserObserveFixtureModel() {
-  return mockModel((request) => {
-    const observeResults = request.toolResults.filter(
-      (entry) => entry.name === "browser_observe",
-    );
-    const observeAsks = request.userMessages.filter((message) =>
-      message.includes(OBSERVE_PROMPT_MARKER),
-    ).length;
-    if (observeAsks > observeResults.length) {
-      return { toolCalls: [{ name: "browser_observe", input: {} }] };
-    }
-    const lastResult = observeResults[observeResults.length - 1];
-    if (lastResult) {
-      return { text: digestObserveResult(lastResult) };
-    }
-    return { text: "fixture-ready" };
-  });
+  return mockModel(observeFixtureResponse);
+}
+
+function observeFixtureResponse(request: {
+  userMessages: readonly string[];
+  toolResults: readonly MockModelToolResult[];
+}) {
+  const observeResults = request.toolResults.filter(
+    (entry) => entry.name === "browser_observe",
+  );
+  const observeAsks = request.userMessages.filter((message) =>
+    message.includes(OBSERVE_PROMPT_MARKER),
+  ).length;
+  if (observeAsks > observeResults.length) {
+    return { toolCalls: [{ name: "browser_observe", input: {} }] };
+  }
+  const lastResult = observeResults[observeResults.length - 1];
+  if (lastResult) {
+    return { text: digestObserveResult(lastResult) };
+  }
+  return { text: "fixture-ready" };
 }
 
 function digestObserveResult(result: MockModelToolResult): string {
@@ -150,6 +155,10 @@ export function browserLoopFixtureModel() {
   return mockModel((request) => {
     const prompt = request.userMessages.join(" ");
     const results = request.toolResults;
+
+    if (prompt.includes(OBSERVE_PROMPT_MARKER)) {
+      return observeFixtureResponse(request);
+    }
 
     if (
       !prompt.includes(LOOP_PROMPT_MARKER) &&

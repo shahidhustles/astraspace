@@ -112,6 +112,22 @@ describe("browser tool presentation", () => {
     expect(presentation?.errorText).toContain("Observe the page before trying it again");
   });
 
+  test("renders an aborted Eve browser tool as cancelled", () => {
+    const presentation = presentBrowserToolPart(
+      browserPart({
+        errorText: "browser_observe failed (cancelled): The turn was cancelled",
+        input: {},
+        state: "output-error",
+        toolCallId: "call-cancelled",
+        toolName: "browser_observe",
+        type: "dynamic-tool",
+      }),
+    );
+
+    expect(presentation?.label).toBe("cancelled");
+    expect(presentation?.errorText).toContain("Observe the page before continuing");
+  });
+
   test("keeps unrecognized dynamic tools out of browser rows", () => {
     expect(
       presentBrowserToolPart(

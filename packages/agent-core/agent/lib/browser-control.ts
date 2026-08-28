@@ -21,7 +21,8 @@ import { BrowserBroker, BrowserBrokerError } from "./browser-broker";
 export const EVE_FILE_WARN_BYTES = 3 * 1024 * 1024;
 
 const BIND_WAIT_MS = 10_000;
-const RESULT_TIMEOUT_MS = 30_000;
+const ACTION_RESULT_TIMEOUT_MS = 45_000;
+const OBSERVATION_RESULT_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 50;
 
 export type BrowserObserveErrorCode =
@@ -66,6 +67,7 @@ export interface BrowserActionToolInput {
   wait?: BrowserActionWait;
   ctx: BrowserActionToolContext;
   broker?: BrowserBroker;
+  resultTimeoutMs?: number;
 }
 
 export interface BrowserActionOutput extends BrowserActionWorkResultPayload {
@@ -93,20 +95,29 @@ export async function runBrowserAction(input: BrowserActionToolInput): Promise<B
     }),
   );
 
-  const result = await raceAbort(
-    () => wrapBrokerFailure(() => broker.waitForResult(input.ctx.session.id, request.requestId, RESULT_TIMEOUT_MS)),
-    input.ctx.abortSignal,
-    async () => {
-      await broker.enqueue(input.ctx.session.id, {
-        sessionId: input.ctx.session.id,
-        turnId: input.ctx.session.turn.id,
-        callId: `${input.ctx.callId}:cancel`,
-        kind: BROWSER_WORK_KIND_ACTION_CANCEL,
-        payload: { actionId: input.ctx.callId },
-      });
-      await broker.cancel(input.ctx.session.id, request.requestId);
-    },
-  );
+  let result: BrowserWorkResult;
+  try {
+    result = await raceAbort(
+      () =>
+        wrapBrokerFailure(() =>
+          broker.waitForResult(
+            input.ctx.session.id,
+            request.requestId,
+            input.resultTimeoutMs ?? ACTION_RESULT_TIMEOUT_MS,
+          ),
+        ),
+      input.ctx.abortSignal,
+      async () => {
+        await enqueueActionCancellation(broker, input.ctx);
+        await broker.cancel(input.ctx.session.id, request.requestId);
+      },
+    );
+  } catch (error) {
+    if (error instanceof BrowserObserveError && error.code === "lease_expired") {
+      await enqueueActionCancellation(broker, input.ctx).catch(() => {});
+    }
+    throw error;
+  }
 
   if (result.status === "cancelled") throw cancelledError();
   if (result.status === "failed") {
@@ -116,6 +127,19 @@ export async function runBrowserAction(input: BrowserActionToolInput): Promise<B
     throw new BrowserObserveError("malformed_envelope", "The browser action result did not match the protocol");
   }
   return { ok: true, ...result.payload };
+}
+
+async function enqueueActionCancellation(
+  broker: BrowserBroker,
+  ctx: BrowserActionToolContext,
+): Promise<void> {
+  await broker.enqueue(ctx.session.id, {
+    sessionId: ctx.session.id,
+    turnId: ctx.session.turn.id,
+    callId: `${ctx.callId}:cancel`,
+    kind: BROWSER_WORK_KIND_ACTION_CANCEL,
+    payload: { actionId: ctx.callId },
+  });
 }
 
 export function browserActionModelParts(output: BrowserActionOutput): ToolModelOutputPart[] {
@@ -166,7 +190,11 @@ export async function observeSelectedPage(
   const result = await raceAbort(
     () =>
       wrapBrokerFailure(() =>
-        input.broker.waitForResult(input.sessionId, request.requestId, input.resultTimeoutMs ?? RESULT_TIMEOUT_MS),
+        input.broker.waitForResult(
+          input.sessionId,
+          request.requestId,
+          input.resultTimeoutMs ?? OBSERVATION_RESULT_TIMEOUT_MS,
+        ),
       ),
     input.abortSignal,
     () => input.broker.cancel(input.sessionId, request.requestId),

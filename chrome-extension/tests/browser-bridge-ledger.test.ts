@@ -50,4 +50,18 @@ describe("BrowserMutationLedger", () => {
     expect(claims.filter((claim) => claim === "dispatch")).toHaveLength(1);
     expect(claims.filter((claim) => claim === "uncertain")).toHaveLength(1);
   });
+
+  test("never dispatches an action again after its terminal entry is compacted", async () => {
+    const ledger = new BrowserMutationLedger();
+    expect(await ledger.begin("call-0")).toBe("dispatch");
+    await ledger.settle("call-0", result("request-0"));
+
+    for (let index = 1; index <= 40; index += 1) {
+      const actionId = `call-${index}`;
+      expect(await ledger.begin(actionId)).toBe("dispatch");
+      await ledger.settle(actionId, result(`request-${index}`));
+    }
+
+    expect(await new BrowserMutationLedger().begin("call-0")).toBe("uncertain");
+  });
 });

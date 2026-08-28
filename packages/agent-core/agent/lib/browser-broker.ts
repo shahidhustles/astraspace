@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -37,6 +37,7 @@ interface ConnectionRecord {
   connectionToken: string;
   generation: number;
   boundAt: string;
+  lastSeenAt: string;
 }
 
 interface LeaseMarker {
@@ -50,18 +51,21 @@ interface BrokerTimings {
   sweepIntervalMs: number;
   staleInstanceMs: number;
   pollIntervalMs: number;
+  connectionStaleMs: number;
 }
 
 const DEFAULT_TIMINGS: BrokerTimings = {
-  leaseMs: 30_000,
+  leaseMs: 60_000,
   resultRetentionMs: 60_000,
   pendingMaxAgeMs: 10 * 60_000,
   sweepIntervalMs: 5_000,
   staleInstanceMs: 24 * 60 * 60_000,
   pollIntervalMs: 50,
+  connectionStaleMs: 45_000,
 };
 
 const MAX_SWEEP_OPS = 500;
+const DEFAULT_INSTANCE_ID = "local";
 
 export interface BrowserBrokerOptions {
   root?: string;
@@ -76,7 +80,6 @@ export class BrowserBroker {
   readonly instanceId: string;
 
   private readonly root: string;
-  private readonly ownsRoot: boolean;
   private readonly now: () => number;
   private readonly timings: BrokerTimings;
   private readonly sweepEnabled: boolean;
@@ -85,9 +88,8 @@ export class BrowserBroker {
   private generation = 0;
 
   constructor(options: BrowserBrokerOptions = {}) {
-    this.ownsRoot = options.root === undefined;
     this.root =
-      options.root ?? join(tmpdir(), "astra-browser-control", `${Date.now()}-${randomUUID()}`);
+      options.root ?? join(tmpdir(), "astra-browser-control", brokerInstanceId());
     this.now = options.now ?? Date.now;
     this.timings = { ...DEFAULT_TIMINGS, ...options.timings };
     this.sweepEnabled = options.sweep ?? true;
@@ -154,14 +156,17 @@ export class BrowserBroker {
       throw new BrowserBrokerError("malformed_envelope", "sessionId is required");
     }
     await this.ensureDirs();
-    this.generation += 1;
+    const active = await this.readActiveConnection();
+    const activeGeneration = active && Number.isInteger(active.generation) ? active.generation : 0;
+    this.generation = Math.max(this.generation, activeGeneration) + 1;
     const record: ConnectionRecord = {
       sessionId,
       connectionToken: randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, ""),
       generation: this.generation,
       boundAt: new Date(this.now()).toISOString(),
+      lastSeenAt: new Date(this.now()).toISOString(),
     };
-    await writeFile(this.connectionFile(), JSON.stringify(record), "utf8");
+    await writeJsonAtomically(this.connectionFile(), record);
     return {
       sessionId: record.sessionId,
       connectionToken: record.connectionToken,
@@ -190,7 +195,9 @@ export class BrowserBroker {
 
   async hasConnectionForSession(sessionId: string): Promise<boolean> {
     const record = await this.readActiveConnection();
-    return record !== null && record.sessionId === sessionId;
+    if (record === null || record.sessionId !== sessionId) return false;
+    const lastSeen = Date.parse(record.lastSeenAt ?? record.boundAt);
+    return Number.isFinite(lastSeen) && this.now() - lastSeen <= this.timings.connectionStaleMs;
   }
 
   async enqueue(sessionId: string, input: EnqueueBrowserWorkInput): Promise<BrowserWorkRequest> {
@@ -223,13 +230,14 @@ export class BrowserBroker {
       throw new BrowserBrokerError("payload_too_large", "Request exceeds the request size bound");
     }
     await this.ensureDirs();
-    await writeFile(this.requestFile(request.requestId), JSON.stringify(request), "utf8");
+    await writeJsonAtomically(this.requestFile(request.requestId), request);
     return request;
   }
 
   async lease(connectionToken: string, waitMs: number): Promise<BrowserLeaseResult> {
     const connection = await this.readConnection(connectionToken);
     await this.ensureDirs();
+    await this.touchConnection(connection);
     const deadline = this.now() + Math.max(0, waitMs);
 
     while (true) {
@@ -238,6 +246,17 @@ export class BrowserBroker {
       if (this.now() >= deadline) return { requests: [] };
       await sleep(this.timings.pollIntervalMs);
     }
+  }
+
+  private async touchConnection(connection: ConnectionRecord): Promise<void> {
+    const active = await this.readActiveConnection();
+    if (active?.connectionToken !== connection.connectionToken) {
+      throw new BrowserBrokerError("invalid_token", "Connection token is not active");
+    }
+    await writeJsonAtomically(this.connectionFile(), {
+      ...active,
+      lastSeenAt: new Date(this.now()).toISOString(),
+    });
   }
 
   private async claimOne(sessionId: string): Promise<BrowserWorkRequest | null> {
@@ -260,18 +279,7 @@ export class BrowserBroker {
 
   private async claimLease(requestId: string): Promise<boolean> {
     const marker: LeaseMarker = { leaseUntil: this.now() + this.timings.leaseMs };
-    try {
-      const handle = await open(this.leaseFile(requestId), "wx");
-      try {
-        await handle.writeFile(JSON.stringify(marker), "utf8");
-      } finally {
-        await handle.close();
-      }
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw error;
-    }
+    return createJsonExclusive(this.leaseFile(requestId), marker);
   }
 
   async submitResult(connectionToken: string, result: BrowserWorkResult): Promise<void> {
@@ -339,18 +347,7 @@ export class BrowserBroker {
   }
 
   private async settleResult(result: BrowserWorkResult): Promise<boolean> {
-    try {
-      const handle = await open(this.resultFile(result.requestId), "wx");
-      try {
-        await handle.writeFile(JSON.stringify(result), "utf8");
-      } finally {
-        await handle.close();
-      }
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw error;
-    }
+    return createJsonExclusive(this.resultFile(result.requestId), result);
   }
 
   private async settleFailed(
@@ -460,9 +457,6 @@ export class BrowserBroker {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
-    if (this.ownsRoot) {
-      await rm(this.root, { recursive: true, force: true }).catch(() => {});
-    }
   }
 
   private async readJson<T>(file: string): Promise<T | null> {
@@ -486,6 +480,38 @@ export class BrowserBroker {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function brokerInstanceId(): string {
+  const configured = process.env.ASTRA_BROWSER_CONTROL_INSTANCE_ID?.trim();
+  if (configured && /^[a-zA-Z0-9_-]{1,64}$/.test(configured)) return configured;
+  return DEFAULT_INSTANCE_ID;
+}
+
+async function writeJsonAtomically(file: string, value: unknown): Promise<void> {
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(value), { encoding: "utf8", flag: "wx" });
+    await rename(temporary, file);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function createJsonExclusive(file: string, value: unknown): Promise<boolean> {
+  const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(value), { encoding: "utf8", flag: "wx" });
+    try {
+      await link(temporary, file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+  } finally {
+    await rm(temporary, { force: true }).catch(() => {});
+  }
 }
 
 export async function createBrokerRoot(prefix: string): Promise<string> {
