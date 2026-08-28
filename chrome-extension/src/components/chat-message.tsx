@@ -4,6 +4,7 @@ import {
   ReasoningContent,
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
+import { BrowserToolPart } from "@/components/browser-tool-part";
 import type { EveMessage } from "eve/react";
 
 interface ChatMessageProps {
@@ -12,7 +13,10 @@ interface ChatMessageProps {
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const hasRenderablePart = message.parts.some(
-    (part) => part.type === "text" || part.type === "reasoning",
+    (part) =>
+      part.type === "text" ||
+      part.type === "reasoning" ||
+      (part.type === "dynamic-tool" && part.toolName.startsWith("browser_")),
   );
 
   if (!hasRenderablePart) return null;
@@ -43,6 +47,10 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 <ReasoningContent>{part.text}</ReasoningContent>
               </Reasoning>
             );
+          }
+
+          if (part.type === "dynamic-tool") {
+            return <BrowserToolPart key={`${message.id}:tool:${index}`} part={part} />;
           }
 
           return null;

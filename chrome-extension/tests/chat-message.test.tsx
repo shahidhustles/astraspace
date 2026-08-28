@@ -26,6 +26,42 @@ describe("chat message rendering", () => {
     expect(html.indexOf("reasoning-first")).toBeLessThan(html.indexOf("answer-second"));
   });
 
+  test("preserves browser tools between Eve text parts", () => {
+    const message = {
+      id: "message-2",
+      parts: [
+        { state: "done", text: "before-tool", type: "text" },
+        {
+          input: {},
+          output: {
+            observation: {
+              dom: "never-render-this-dom",
+              refs: [],
+              screenshot: { data: "never-render-this-base64" },
+              snapshot: { snapshotId: "snapshot-1" },
+              tabId: 7,
+              title: "Example page",
+              url: "https://example.test/",
+            },
+          },
+          state: "output-available",
+          toolCallId: "call-1",
+          toolName: "browser_observe",
+          type: "dynamic-tool",
+        },
+        { state: "done", text: "after-tool", type: "text" },
+      ],
+      role: "assistant",
+    } satisfies EveMessage;
+
+    const html = renderToStaticMarkup(createElement(ChatMessage, { message }));
+
+    expect(html.indexOf("before-tool")).toBeLessThan(html.indexOf("Observe page"));
+    expect(html.indexOf("Observe page")).toBeLessThan(html.indexOf("after-tool"));
+    expect(html).not.toContain("never-render-this-dom");
+    expect(html).not.toContain("never-render-this-base64");
+  });
+
   test("does not render closed reasoning content", () => {
     const html = renderToStaticMarkup(
       createElement(
