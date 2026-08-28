@@ -19,6 +19,11 @@ import { AstraBlob } from "@/components/astra-blob";
 import { ChatMessage } from "@/components/chat-message";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
+import {
+  notifyEveSessionChanged,
+  readStoredEveSession,
+  storeEveSession,
+} from "@/lib/eve-browser-session";
 import { hasFirstAssistantToken } from "@/lib/eve-runtime-metadata";
 import { DEFAULT_MODEL_ID, type ModelId } from "@/lib/model-catalog";
 import { useEveAgent } from "eve/react";
@@ -37,7 +42,46 @@ function Mark() {
 }
 
 export function ChatPanel() {
-  const agent = useEveAgent({ host: EVE_HOST });
+  const [restoredSessionId, setRestoredSessionId] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    void readStoredEveSession().then((session) => {
+      if (!cancelled) setRestoredSessionId(session?.sessionId ?? null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (restoredSessionId === undefined) {
+    return <div aria-hidden className="h-full min-w-[280px] bg-space-950" />;
+  }
+  return (
+    <EveChatPanel
+      key={restoredSessionId ?? "new"}
+      restoredSessionId={restoredSessionId}
+    />
+  );
+}
+
+function EveChatPanel({ restoredSessionId }: { restoredSessionId: string | null }) {
+  const agent = useEveAgent({
+    host: EVE_HOST,
+    initialSession:
+      restoredSessionId === null
+        ? undefined
+        : { sessionId: restoredSessionId, streamIndex: 0 },
+    resume: restoredSessionId !== null,
+    onSessionChange(session) {
+      if (session === undefined) {
+        void storeEveSession(null);
+        return;
+      }
+      void storeEveSession(session);
+      void notifyEveSessionChanged(session.sessionId);
+    },
+  });
   const [input, setInput] = useState("");
   const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [sendFailed, setSendFailed] = useState(false);

@@ -5,9 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "eve dev",
-    "check": "eve info"
+    "check": "eve info",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.0",
+    "@types/node": "^24.0.0",
+    "typescript": "~6.0.2"
   },
   "dependencies": {
+    "@astra-space/browser-control-contract": "workspace:*",
     "@ai-sdk/openai": "^4.0.47",
     "@ai-sdk/openai-compatible": "^3.0.37",
     "@vercel/connect": "0.4.3",

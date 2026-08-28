@@ -3,8 +3,10 @@
   "name": "Astra Space",
   "version": "0.0.0",
   "description": "A privacy-first browser agent.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzlulUO2FnLjzgcxjk94P8V4nDzSRGNZ4/t9ywNkmXFxVja7e0AP4LQFm19CMLcGvVVDrqw6LEAk1azK5AlX08vbkkNG75vLyv30j5psQurLX307j/iBf7qKbc/FriMQlXyLiWLxITHhlDshh05F+BnnANi+fxkqS2h3kH/u50wZ1w3afXAa1S4cxvbupEvmYrSjJs1Ze1jgQlFwrElZ3SDoJNHsvJMVu92rkMDcwRUZYdS7acn9hJig+nX8nw27XeQJsHC7B45gWCboTsm+b0lrOcU0r+s2ivnjD6gLelkRvio+iifnxHsrmRvyBfCkgwEa2Oz1pRH3FMYlx+9Lm4QIDAQAB",
+  "minimum_chrome_version": "118",
   "host_permissions": ["http://127.0.0.1:2000/*"],
-  "permissions": ["sidePanel", "debugger", "tabs"],
+  "permissions": ["sidePanel", "debugger", "tabs", "storage"],
   "action": {
     "default_title": "Open Astra Space"
   },

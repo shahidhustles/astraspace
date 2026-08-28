@@ -1,4 +1,5 @@
 import { BrowserContext } from "./browser/context";
+import { BrowserControlBridge } from "./browser/bridge";
 import {
   handleBrowserRuntimeMessage,
   isAttachActiveTabMessage,
@@ -6,12 +7,24 @@ import {
   isBrowserActionMessage,
   isObserveSelectedTabMessage,
 } from "./browser/runtime";
+import { isEveSessionChangedMessage } from "./lib/eve-browser-session";
 
 export const browserContext = new BrowserContext({
   diagnostics: (event) => console.info("browser", event),
 });
 
+export const browserControlBridge = new BrowserControlBridge();
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (isEveSessionChangedMessage(message)) {
+    void browserControlBridge
+      .bind(message.sessionId)
+      .then((bound) => {
+        if (!bound) console.info("browser-control bind failed", message.sessionId);
+      })
+      .catch((error) => console.info("browser-control bind error", error));
+    return false;
+  }
   if (
     !isAttachActiveTabMessage(message) &&
     !isObserveSelectedTabMessage(message) &&
@@ -22,6 +35,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   void handleBrowserRuntimeMessage(message, browserContext).then(sendResponse);
   return true;
+});
+
+void browserControlBridge.resumeFromStorage().catch((error) => {
+  console.info("browser-control resume failed", error);
 });
 
 chrome.sidePanel
