@@ -170,19 +170,27 @@ export class BrowserBroker {
   }
 
   private async readConnection(token: string): Promise<ConnectionRecord> {
-    const raw = await readFile(this.connectionFile(), "utf8").catch(() => null);
-    let parsed: ConnectionRecord | null = null;
-    if (raw !== null) {
-      try {
-        parsed = JSON.parse(raw) as ConnectionRecord;
-      } catch {
-        parsed = null;
-      }
-    }
+    const parsed = await this.readActiveConnection();
     if (!parsed || typeof parsed.connectionToken !== "string" || parsed.connectionToken !== token) {
       throw new BrowserBrokerError("invalid_token", "Connection token is not active");
     }
     return parsed;
+  }
+
+  private async readActiveConnection(): Promise<ConnectionRecord | null> {
+    const raw = await readFile(this.connectionFile(), "utf8").catch(() => null);
+    if (raw === null) return null;
+    try {
+      const parsed = JSON.parse(raw) as ConnectionRecord;
+      return typeof parsed?.sessionId === "string" ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async hasConnectionForSession(sessionId: string): Promise<boolean> {
+    const record = await this.readActiveConnection();
+    return record !== null && record.sessionId === sessionId;
   }
 
   async enqueue(sessionId: string, input: EnqueueBrowserWorkInput): Promise<BrowserWorkRequest> {

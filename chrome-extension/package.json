@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:integration": "bun test --timeout 30000 --max-concurrency 1 tests/browser-observation.integration.test.ts tests/browser-action-catalog.integration.test.ts tests/browser-mv3-runtime.integration.test.ts tests/browser-action-waits.integration.test.ts"
+    "test:integration": "bun run build:extension && bun test --timeout 30000 --max-concurrency 1 tests/browser-observation.integration.test.ts tests/browser-action-catalog.integration.test.ts tests/browser-mv3-runtime.integration.test.ts tests/browser-action-waits.integration.test.ts tests/browser-eve-observe.integration.test.ts"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

@@ -22,7 +22,8 @@ export type BrowserControlErrorCode =
   | "payload_too_large"
   | "unknown_request"
   | "lease_expired"
-  | "broker_unavailable";
+  | "broker_unavailable"
+  | "browser_unavailable";
 
 export interface BrowserControlError {
   code: BrowserControlErrorCode;
@@ -39,6 +40,7 @@ const BROWSER_CONTROL_ERROR_CODES: readonly BrowserControlErrorCode[] = [
   "unknown_request",
   "lease_expired",
   "broker_unavailable",
+  "browser_unavailable",
 ];
 
 export function isBrowserControlErrorCode(value: unknown): value is BrowserControlErrorCode {
@@ -113,6 +115,8 @@ export interface BrowserLeaseResult {
   requests: BrowserWorkRequest[];
 }
 
+export const BROWSER_WORK_KIND_OBSERVE = "browser.observe";
+
 export function isConfiguredBrowserControlOrigin(
   origin: string | null | undefined,
 ): origin is string {
@@ -186,4 +190,217 @@ export function isBrowserControlBody<TData>(
     );
   }
   return isData(value.data);
+}
+
+export interface BrowserObserveBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BrowserObserveScroll {
+  x: number;
+  y: number;
+  maxX: number;
+  maxY: number;
+  atTop: boolean;
+  atBottom: boolean;
+  atLeft: boolean;
+  atRight: boolean;
+}
+
+export interface BrowserObserveTab {
+  tabId: number;
+  url: string;
+  title: string;
+  attached: boolean;
+  selected: boolean;
+}
+
+export interface BrowserObserveRef {
+  ref: number;
+  tag: string;
+  role: string | null;
+  name: string | null;
+  attrs: Record<string, string>;
+  bounds: BrowserObserveBounds | null;
+}
+
+export interface BrowserObserveSnapshot {
+  snapshotId: string;
+  snapshotVersion: number;
+  documentEpoch: number;
+  navigationEpoch: number;
+}
+
+export interface BrowserObserveScreenshot {
+  mimeType: "image/jpeg";
+  data: string;
+  width: number;
+  height: number;
+}
+
+export interface BrowserObserveState {
+  tabs: BrowserObserveTab[];
+  tabId: number;
+  url: string;
+  title: string;
+  scroll: BrowserObserveScroll;
+  snapshot: BrowserObserveSnapshot;
+  refs: BrowserObserveRef[];
+  dom: string;
+  screenshot: BrowserObserveScreenshot;
+}
+
+export type BrowserObservationErrorCode =
+  | "invalid_url"
+  | "unsupported_page"
+  | "url_denied"
+  | "attach_failed"
+  | "active_tab_unavailable"
+  | "inaccessible_tab"
+  | "attach_conflict"
+  | "missing_tab"
+  | "chrome_api_error"
+  | "lifecycle_timeout"
+  | "selected_tab_unavailable"
+  | "unsupported_redirect"
+  | "navigation_timeout"
+  | "navigation_failed"
+  | "disconnect_failed"
+  | "observation_failed";
+
+const BROWSER_OBSERVATION_ERROR_CODES: readonly BrowserObservationErrorCode[] = [
+  "invalid_url",
+  "unsupported_page",
+  "url_denied",
+  "attach_failed",
+  "active_tab_unavailable",
+  "inaccessible_tab",
+  "attach_conflict",
+  "missing_tab",
+  "chrome_api_error",
+  "lifecycle_timeout",
+  "selected_tab_unavailable",
+  "unsupported_redirect",
+  "navigation_timeout",
+  "navigation_failed",
+  "disconnect_failed",
+  "observation_failed",
+];
+
+export interface BrowserObservationError {
+  code: BrowserObservationErrorCode;
+  message: string;
+}
+
+export type BrowserObserveResultPayload =
+  | { ok: true; state: BrowserObserveState }
+  | { ok: false; error: BrowserObservationError };
+
+function isBrowserObserveBounds(value: unknown): value is BrowserObserveBounds {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.width === "number" &&
+    typeof value.height === "number"
+  );
+}
+
+function isBrowserObserveScroll(value: unknown): value is BrowserObserveScroll {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.maxX === "number" &&
+    typeof value.maxY === "number" &&
+    typeof value.atTop === "boolean" &&
+    typeof value.atBottom === "boolean" &&
+    typeof value.atLeft === "boolean" &&
+    typeof value.atRight === "boolean"
+  );
+}
+
+function isBrowserObserveTab(value: unknown): value is BrowserObserveTab {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.tabId === "number" &&
+    typeof value.url === "string" &&
+    typeof value.title === "string" &&
+    typeof value.attached === "boolean" &&
+    typeof value.selected === "boolean"
+  );
+}
+
+function isBrowserObserveRef(value: unknown): value is BrowserObserveRef {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.ref !== "number" ||
+    typeof value.tag !== "string" ||
+    (value.role !== null && typeof value.role !== "string") ||
+    (value.name !== null && typeof value.name !== "string") ||
+    (value.bounds !== null && !isBrowserObserveBounds(value.bounds))
+  ) {
+    return false;
+  }
+  if (!isRecord(value.attrs)) return false;
+  return Object.values(value.attrs).every((attr) => typeof attr === "string");
+}
+
+function isBrowserObserveSnapshot(value: unknown): value is BrowserObserveSnapshot {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.snapshotId === "string" &&
+    value.snapshotId.length > 0 &&
+    typeof value.snapshotVersion === "number" &&
+    typeof value.documentEpoch === "number" &&
+    typeof value.navigationEpoch === "number"
+  );
+}
+
+function isBrowserObserveScreenshot(value: unknown): value is BrowserObserveScreenshot {
+  if (!isRecord(value)) return false;
+  return (
+    value.mimeType === "image/jpeg" &&
+    typeof value.data === "string" &&
+    value.data.length > 0 &&
+    typeof value.width === "number" &&
+    typeof value.height === "number"
+  );
+}
+
+function isBrowserObserveState(value: unknown): value is BrowserObserveState {
+  if (!isRecord(value)) return false;
+  if (
+    !Array.isArray(value.tabs) ||
+    !value.tabs.every(isBrowserObserveTab) ||
+    typeof value.tabId !== "number" ||
+    typeof value.url !== "string" ||
+    typeof value.title !== "string" ||
+    !isBrowserObserveScroll(value.scroll) ||
+    !isBrowserObserveSnapshot(value.snapshot) ||
+    !Array.isArray(value.refs) ||
+    !value.refs.every(isBrowserObserveRef) ||
+    typeof value.dom !== "string" ||
+    !isBrowserObserveScreenshot(value.screenshot)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function isBrowserObserveResultPayload(
+  value: unknown,
+): value is BrowserObserveResultPayload {
+  if (!isRecord(value) || typeof value.ok !== "boolean") return false;
+  if (value.ok) return isBrowserObserveState(value.state);
+  return (
+    isRecord(value.error) &&
+    (BROWSER_OBSERVATION_ERROR_CODES as readonly string[]).includes(
+      value.error.code as string,
+    ) &&
+    typeof value.error.message === "string"
+  );
 }

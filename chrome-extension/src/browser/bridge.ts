@@ -7,10 +7,12 @@ import {
   MAX_LONG_POLL_MS,
   type BrowserBindResult,
   type BrowserControlBody,
+  type BrowserControlErrorCode,
   type BrowserLeaseResult,
   type BrowserWorkRequest,
   type BrowserWorkResult,
   isBrowserControlBody,
+  isBrowserControlErrorCode,
   isBrowserWorkRequest,
   isBrowserWorkResult,
 } from "@astra-space/browser-control-contract";
@@ -54,7 +56,7 @@ function isBindData(value: unknown): value is BrowserBindResult {
 
 function failedResult(
   request: BrowserWorkRequest,
-  code: "broker_unavailable",
+  code: BrowserControlErrorCode,
   message: string,
 ): BrowserWorkResult {
   return {
@@ -211,28 +213,46 @@ export class BrowserControlBridge {
     connection: StoredBrowserConnection,
     request: BrowserWorkRequest,
   ): Promise<void> {
-    let result: BrowserWorkResult | null = null;
-    if (this.dispatcher !== null) {
-      try {
-        result = await this.dispatcher(request);
-      } catch (error) {
-        console.info("browser-bridge dispatcher failed", error);
-      }
-    }
-
-    const valid =
-      result !== null &&
-      result.requestId === request.requestId &&
-      result.sessionId === request.sessionId &&
-      isBrowserWorkResult(result);
-    if (!valid) {
-      result = failedResult(
-        request,
-        "broker_unavailable",
-        "The service worker returned no valid browser result",
+    const result = await this.computeResult(request);
+    try {
+      await this.postResult(connection, result);
+    } catch (error) {
+      // A rejected oversized or malformed result would otherwise strand the
+      // request until lease expiry. Settle a small typed failure instead.
+      const code =
+        error instanceof BrokerRejection && isBrowserControlErrorCode(error.code)
+          ? error.code
+          : "broker_unavailable";
+      await this.postResult(
+        connection,
+        failedResult(request, code, "The browser result could not be delivered"),
       );
     }
+  }
 
+  private async computeResult(request: BrowserWorkRequest): Promise<BrowserWorkResult> {
+    if (this.dispatcher === null) {
+      return failedResult(request, "broker_unavailable", "The service worker has no browser dispatcher");
+    }
+    try {
+      const result = await this.dispatcher(request);
+      if (
+        result.requestId === request.requestId &&
+        result.sessionId === request.sessionId &&
+        isBrowserWorkResult(result)
+      ) {
+        return result;
+      }
+    } catch (error) {
+      console.info("browser-bridge dispatcher failed", error);
+    }
+    return failedResult(request, "broker_unavailable", "The service worker returned no valid browser result");
+  }
+
+  private async postResult(
+    connection: StoredBrowserConnection,
+    result: BrowserWorkResult,
+  ): Promise<void> {
     const response = await fetch(`${this.host}${BROWSER_CONTROL_RESULTS_PATH}`, {
       method: "POST",
       headers: {

@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "strict": true
   },
-  "include": ["agent/lib", "agent/channels", "tests"]
+  "include": ["agent/lib", "agent/tools", "agent/channels", "tests"]
 }

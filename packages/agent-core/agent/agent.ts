@@ -1,9 +1,9 @@
 import { defineAgent, defineDynamic, type AgentModelResolveContext } from "eve";
-import { DEFAULT_MODEL_ID, isModelId, models, type ModelId } from "./models";
+import { DEFAULT_MODEL_ID, resolveModel } from "./models";
 
 const CLIENT_CONTEXT_PREFIX = "Client context:\n";
 
-function modelIdFromContextMessage(content: string): ModelId | null {
+function modelIdFromContextMessage(content: string): string | null {
   if (!content.startsWith(CLIENT_CONTEXT_PREFIX)) return null;
 
   try {
@@ -11,13 +11,13 @@ function modelIdFromContextMessage(content: string): ModelId | null {
     if (typeof context !== "object" || context === null || Array.isArray(context)) return null;
 
     const modelId = Reflect.get(context, "astraModelId");
-    return isModelId(modelId) ? modelId : null;
+    return typeof modelId === "string" && modelId.length > 0 ? modelId : null;
   } catch {
     return null;
   }
 }
 
-function selectedModelId(messages: AgentModelResolveContext["messages"]): ModelId {
+function selectedModelId(messages: AgentModelResolveContext["messages"]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role !== "user" || typeof message.content !== "string") continue;
@@ -31,7 +31,7 @@ function selectedModelId(messages: AgentModelResolveContext["messages"]): ModelI
 
 const dynamicModel = defineDynamic({
   events: {
-    "step.started": (_event, context) => models[selectedModelId(context.messages)],
+    "step.started": (_event, context) => resolveModel(selectedModelId(context.messages)),
   },
 });
 

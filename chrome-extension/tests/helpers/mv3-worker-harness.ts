@@ -50,6 +50,9 @@ export interface Mv3HarnessOptions {
   // It receives the fixture origin because the harness owns the local port.
   driverJs: (origin: string) => string;
   driverHtmlName?: string;
+  // Serves test-controlled GET routes (driver state, fixtures) before the
+  // harness defaults. Return undefined to fall through.
+  onFetch?: (url: URL) => Response | undefined;
 }
 
 export interface Mv3Harness {
@@ -99,6 +102,12 @@ export async function createMv3Harness(options: Mv3HarnessOptions): Promise<Mv3H
     port: 0,
     async fetch(request, upgradeServer) {
       const url = new URL(request.url);
+      if (request.method === "GET" && options.onFetch) {
+        const custom = options.onFetch(url);
+        if (custom !== undefined) {
+          return custom;
+        }
+      }
       if (request.method === "OPTIONS") {
         return new Response(null, {
           status: 204,

@@ -1,6 +1,7 @@
 import { BrowserContext } from "./browser/context";
 import { BrowserControlBridge } from "./browser/bridge";
 import {
+  dispatchBrowserWorkRequest,
   handleBrowserRuntimeMessage,
   isAttachActiveTabMessage,
   isBrowserActionCancelMessage,
@@ -14,6 +15,10 @@ export const browserContext = new BrowserContext({
 });
 
 export const browserControlBridge = new BrowserControlBridge();
+
+browserControlBridge.setDispatcher((request) =>
+  dispatchBrowserWorkRequest(request, browserContext),
+);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (isEveSessionChangedMessage(message)) {

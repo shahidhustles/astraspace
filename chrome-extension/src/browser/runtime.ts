@@ -8,10 +8,18 @@ import {
   type ScheduledAction,
 } from "./actions/types";
 import { parseBrowserActionMessage, parseBrowserCancelMessage } from "./actions/validation";
+import { readJpegDimensions } from "./observation/capture";
 import type { AttachResult } from "./page";
-import type { ObservationResult } from "./types";
+import type { BrowserState, ObservationResult } from "./types";
 import { enqueueActionRequest, TabActionCoordinator } from "./waits/coordinator";
 import type { ActionId } from "./waits/types";
+import {
+  BROWSER_WORK_KIND_OBSERVE,
+  type BrowserObserveResultPayload,
+  type BrowserObserveState,
+  type BrowserWorkRequest,
+  type BrowserWorkResult,
+} from "@astra-space/browser-control-contract";
 
 export const ATTACH_ACTIVE_TAB_MESSAGE = "browser.attach-active-tab";
 export const OBSERVE_SELECTED_TAB_MESSAGE = "browser.observe-selected-tab";
@@ -111,5 +119,103 @@ export function attachTabActionCoordinator(
     ...base,
     scheduleAction: ({ request, tabId }) => enqueueActionRequest(coordinator, request, tabId, base),
     cancelAction: (id) => coordinator.cancel(id),
+  };
+}
+
+type ObserveContext = { observe: () => Promise<ObservationResult> };
+
+function isObserveWorkRequest(request: BrowserWorkRequest): boolean {
+  return request.kind === BROWSER_WORK_KIND_OBSERVE;
+}
+
+// Executes one brokered browser request against the service-worker-owned
+// BrowserContext. Observation failures become a completed result whose payload
+// carries the typed observation error; transport failures stay out of here.
+export async function dispatchBrowserWorkRequest(
+  request: BrowserWorkRequest,
+  context: ObserveContext,
+): Promise<BrowserWorkResult> {
+  if (!isObserveWorkRequest(request)) {
+    return {
+      requestId: request.requestId,
+      sessionId: request.sessionId,
+      status: "failed",
+      error: {
+        code: "malformed_envelope",
+        message: `Unknown browser work kind: ${request.kind}`,
+      },
+      completedAt: new Date().toISOString(),
+    };
+  }
+
+  const payload = await observePayload(context);
+  return {
+    requestId: request.requestId,
+    sessionId: request.sessionId,
+    status: "completed",
+    payload: payload as Record<string, unknown>,
+    completedAt: new Date().toISOString(),
+  };
+}
+
+async function observePayload(context: ObserveContext): Promise<BrowserObserveResultPayload> {
+  const result = await context.observe();
+  if (!result.ok) {
+    return { ok: false, error: { code: result.error.code, message: result.error.message } };
+  }
+
+  const state = result.state;
+  if (!screenshotMatchesSnapshot(state)) {
+    return {
+      ok: false,
+      error: {
+        code: "observation_failed",
+        message: "The captured screenshot does not match the observation's snapshot identity",
+      },
+    };
+  }
+  return { ok: true, state: observeStateToWire(state) };
+}
+
+function screenshotMatchesSnapshot(state: BrowserState): boolean {
+  const dimensions = readJpegDimensions(state.screenshot.data);
+  if (dimensions === null) return false;
+  return dimensions.width === state.screenshot.width && dimensions.height === state.screenshot.height;
+}
+
+function observeStateToWire(state: BrowserState): BrowserObserveState {
+  return {
+    tabs: state.tabs.map((tab) => ({
+      tabId: tab.tabId,
+      url: tab.url,
+      title: tab.title,
+      attached: tab.attached,
+      selected: tab.selected,
+    })),
+    tabId: state.tabId,
+    url: state.url,
+    title: state.title,
+    scroll: { ...state.scroll },
+    snapshot: {
+      snapshotId: state.snapshotId,
+      snapshotVersion: state.snapshotVersion,
+      documentEpoch: state.documentEpoch,
+      navigationEpoch: state.navigationEpoch,
+    },
+    refs: state.refs.map((ref) => ({
+      ref: ref.ref,
+      tag: ref.tag,
+      role: ref.role,
+      name: ref.name,
+      attrs: { ...ref.attrs },
+      bounds: ref.bounds ? { ...ref.bounds } : null,
+    })),
+    dom: state.dom,
+    screenshot: {
+      mimeType: "image/jpeg",
+      data: state.screenshot.data,
+      width: state.screenshot.width,
+      height: state.screenshot.height,
+    },
   };
 }
