@@ -149,6 +149,9 @@ export async function createMv3Harness(options: Mv3HarnessOptions): Promise<Mv3H
     if (pathname === "/" || pathname.startsWith("/fixture")) {
       return Bun.file(join(FIXTURES_DIR, "browser-action-waits.html")).text();
     }
+    if (pathname === "/eve-loop") {
+      return Bun.file(join(FIXTURES_DIR, "eve-browser-control.html")).text();
+    }
     if (pathname === "/child.html") {
       return Bun.file(join(FIXTURES_DIR, "browser-frame-child.html")).text();
     }

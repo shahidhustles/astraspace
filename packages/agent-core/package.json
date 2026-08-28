@@ -7,6 +7,7 @@
     "dev": "eve dev",
     "check": "eve info",
     "test": "bun test",
+    "test:integration": "bun test tests/eve-browser-control-loop.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { AgentModelSelectionDefinition } from "eve";
-import { browserObserveFixtureModel, FIXTURE_MODEL_ID } from "./lib/browser-fixture-model";
+import { browserLoopFixtureModel, FIXTURE_MODEL_ID } from "./lib/browser-fixture-model";
 
 const ZEN_BASE_URL = "https://opencode.ai/zen/go/v1";
 const zenOpenAI = createOpenAI({
@@ -33,7 +33,7 @@ export function isModelId(value: unknown): value is ModelId {
 
 export function resolveModel(id: string): AgentModelSelectionDefinition {
   if (id === FIXTURE_MODEL_ID && process.env.ASTRA_FIXTURE_MODELS === "1") {
-    return { model: browserObserveFixtureModel(), modelContextWindowTokens: 128_000 };
+    return { model: browserLoopFixtureModel(), modelContextWindowTokens: 128_000 };
   }
   return isModelId(id) ? models[id] : models[DEFAULT_MODEL_ID];
 }
