@@ -18,6 +18,13 @@ export const browserContext = new BrowserContext({
 export const browserControlBridge = new BrowserControlBridge();
 const browserMutationLedger = new BrowserMutationLedger();
 
+async function attachActiveTabForBrowserControl(): Promise<void> {
+  const result = await browserContext.useActiveTab();
+  if (!result.ok) {
+    console.info("browser-control active-tab attach failed", result.error.code);
+  }
+}
+
 browserControlBridge.setDispatcher((request) =>
   dispatchBrowserWorkRequest(request, browserContext, browserMutationLedger),
 );
@@ -28,6 +35,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .bind(message.sessionId)
       .then((bound) => {
         if (!bound) console.info("browser-control bind failed", message.sessionId);
+        if (bound) void attachActiveTabForBrowserControl();
       })
       .catch((error) => console.info("browser-control bind error", error));
     return false;
@@ -44,9 +52,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-void browserControlBridge.resumeFromStorage().catch((error) => {
-  console.info("browser-control resume failed", error);
-});
+void browserControlBridge
+  .resumeFromStorage()
+  .then((resumed) => {
+    if (resumed) void attachActiveTabForBrowserControl();
+  })
+  .catch((error) => {
+    console.info("browser-control resume failed", error);
+  });
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })

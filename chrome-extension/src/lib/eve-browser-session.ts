@@ -82,3 +82,11 @@ export async function notifyEveSessionChanged(sessionId: string): Promise<void> 
     // The worker may be starting up; it reads the stored connection on wake.
   }
 }
+
+export async function notifyBrowserActiveTab(): Promise<void> {
+  try {
+    await chrome.runtime.sendMessage({ type: "browser.attach-active-tab" });
+  } catch {
+    // The worker may be starting up; the next browser request can retry this.
+  }
+}

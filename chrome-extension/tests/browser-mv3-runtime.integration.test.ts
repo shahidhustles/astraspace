@@ -30,6 +30,7 @@ describe("browser runtime inside a real unpacked MV3 service worker", () => {
         try {
           const send = (message) => chrome.runtime.sendMessage(message);
           const fixtureUrl = S + "/fixture";
+          const opened = await send({ type: M.action, action: "browser_open_tab", input: { url: fixtureUrl } });
           const tab = await chrome.tabs.create({ url: fixtureUrl, active: true });
           const deadline = Date.now() + 5000;
           while (Date.now() < deadline) {
@@ -40,7 +41,7 @@ describe("browser runtime inside a real unpacked MV3 service worker", () => {
           const attach = await send({ type: M.attach });
           const observe = await send({ type: M.observe });
           const refresh = await send({ type: M.action, action: "browser_refresh", input: {} });
-          await post({ attach, observe, refresh });
+          await post({ opened, attach, observe, refresh });
         } catch (error) {
           await post({ error: String(error) });
         }
@@ -48,6 +49,14 @@ describe("browser runtime inside a real unpacked MV3 service worker", () => {
     });
 
     interface SmokeRecord {
+      opened?: {
+        ok: boolean;
+        action?: string;
+        tabId?: number;
+        url?: string;
+        completion?: { status?: string };
+        error?: unknown;
+      };
       attach?: { ok: boolean; tabId?: number; error?: unknown };
       observe?: {
         ok: boolean;
@@ -70,6 +79,12 @@ describe("browser runtime inside a real unpacked MV3 service worker", () => {
     const record = await harness.report<SmokeRecord>("smoke");
 
     expect(record.error).toBeUndefined();
+    expect(record.opened).toMatchObject({
+      ok: true,
+      action: "browser_open_tab",
+      url: expect.stringContaining("/fixture"),
+      completion: { status: "completed" },
+    });
     expect(record.attach?.ok).toBe(true);
     expect(record.observe?.ok).toBe(true);
     expect(record.observe?.state?.refs?.length ?? 0).toBeGreaterThan(0);

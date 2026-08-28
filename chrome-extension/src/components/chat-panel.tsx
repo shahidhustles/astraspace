@@ -20,6 +20,7 @@ import { ChatMessage } from "@/components/chat-message";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
 import {
+  notifyBrowserActiveTab,
   notifyEveSessionChanged,
   readStoredEveSession,
   storeEveSession,
@@ -82,6 +83,11 @@ function EveChatPanel({ restoredSessionId }: { restoredSessionId: string | null 
       void notifyEveSessionChanged(session.sessionId);
     },
   });
+
+  useEffect(() => {
+    void notifyBrowserActiveTab();
+  }, []);
+
   const [input, setInput] = useState("");
   const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [sendFailed, setSendFailed] = useState(false);
@@ -115,6 +121,7 @@ function EveChatPanel({ restoredSessionId }: { restoredSessionId: string | null 
     setInput("");
 
     try {
+      await notifyBrowserActiveTab();
       await agent.send(text, {
         clientContext: { astraModelId: modelId },
         ...(isBusy ? { turnPolicy: "steer" as const } : {}),

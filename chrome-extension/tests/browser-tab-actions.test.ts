@@ -27,6 +27,7 @@ const completes = (status: string) => ({
   actionId: expect.any(String),
   status,
   elapsedMs: expect.any(Number),
+  dispatchStarted: true,
 });
 
 function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
@@ -47,6 +48,25 @@ function fakeRuntime(overrides: Partial<BrowserRuntime> = {}): BrowserRuntime {
 }
 
 describe("browser_open_tab", () => {
+  test("opens a tab when no tab is selected yet", async () => {
+    let openedUrl: string | null = null;
+    const runtime = fakeRuntime({
+      selectedTabId: null,
+      openTab: async (url) => {
+        openedUrl = url;
+        return { ok: true, tabId: 9, measured: OPEN_MEASURED };
+      },
+    });
+
+    const result = await handleBrowserRuntimeMessage(
+      { type: BROWSER_ACTION_MESSAGE, action: "browser_open_tab", input: { url: "https://opened.example" } },
+      runtime,
+    );
+
+    expect(openedUrl).toBe("https://opened.example");
+    expect(result).toMatchObject({ ok: true, action: "browser_open_tab", tabId: 9 });
+  });
+
   test("opens a tab and returns the selected tab with filtered tab state", async () => {
     let openedUrl: string | null = null;
     const runtime = fakeRuntime({

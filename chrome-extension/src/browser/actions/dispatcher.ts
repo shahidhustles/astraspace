@@ -52,11 +52,18 @@ export interface BrowserActionRuntime {
   listTabs: () => Promise<TabListResult>;
 }
 
+// Opening a tab does not need an existing page. It still gets a coordinator
+// lane so open-tab requests remain serialized without pretending a real tab
+// is selected.
+export const OPEN_TAB_COORDINATION_ID = -1;
+
 // One place decides which tab an action acts on, so scheduling and dispatch
 // agree. Targeted actions use their target's tab; everything else follows the
 // selected tab.
 export function resolveActionTabId(request: BrowserActionRequest, selectedTabId: number | null): number | null {
   switch (request.action) {
+    case "browser_open_tab":
+      return OPEN_TAB_COORDINATION_ID;
     case "browser_click":
     case "browser_clear_input":
     case "browser_get_select_options":
