@@ -2,17 +2,22 @@ import { createOpenAI } from "@ai-sdk/openai";
 import type { AgentModelSelectionDefinition } from "eve";
 import { browserLoopFixtureModel, FIXTURE_MODEL_ID } from "./lib/browser-fixture-model";
 
-const ZEN_BASE_URL = "https://opencode.ai/zen/go/v1";
+const GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+const ZEN_BASE_URL = "https://opencode.ai/zen/v1";
+const goOpenAI = createOpenAI({
+  apiKey: process.env.OPENCODE_API_KEY,
+  baseURL: GO_BASE_URL,
+});
 const zenOpenAI = createOpenAI({
   apiKey: process.env.OPENCODE_API_KEY,
   baseURL: ZEN_BASE_URL,
 });
 
-export const DEFAULT_MODEL_ID = "gpt-5.6-luna";
+export const DEFAULT_MODEL_ID = "muse-spark-1.2-contributor-free";
 
 export const models = {
   "gpt-5.6-luna": {
-    model: zenOpenAI.responses("gpt-5.6-luna"),
+    model: goOpenAI.responses("gpt-5.6-luna"),
     modelContextWindowTokens: 1_050_000,
     modelOptions: {
       providerOptions: {
@@ -20,8 +25,8 @@ export const models = {
       },
     },
   } satisfies AgentModelSelectionDefinition,
-  "muse-spark-1.2-contributor": {
-    model: zenOpenAI.responses("muse-spark-1.2-contributor"),
+  "muse-spark-1.2-contributor-free": {
+    model: zenOpenAI.responses("muse-spark-1.2-contributor-free"),
     modelContextWindowTokens: 1_048_576,
   } satisfies AgentModelSelectionDefinition,
 } as const;
