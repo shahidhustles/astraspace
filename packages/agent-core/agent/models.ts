@@ -28,6 +28,11 @@ export const models = {
   "muse-spark-1.2-contributor-free": {
     model: zenOpenAI.responses("muse-spark-1.2-contributor-free"),
     modelContextWindowTokens: 1_048_576,
+    modelOptions: {
+      providerOptions: {
+        openai: { reasoningEffort: "xhigh" },
+      },
+    },
   } satisfies AgentModelSelectionDefinition,
 } as const;
 
