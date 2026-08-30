@@ -8,7 +8,6 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:integration": "bun run build:extension && ASTRA_FIXTURE_MODELS=1 bun test --timeout 30000 --max-concurrency 1 tests/browser-observation.integration.test.ts tests/browser-action-catalog.integration.test.ts tests/browser-mv3-runtime.integration.test.ts tests/browser-action-waits.integration.test.ts tests/browser-eve-observe.integration.test.ts tests/browser-eve-actions.integration.test.ts tests/eve-browser-control-loop.integration.test.ts",
     "test:scan": "bun test tests/built-bundle-import-scan.test.ts"
   },
   "devDependencies": {
@@ -23,7 +22,6 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "@astra-space/browser-control-contract": "workspace:*",
     "@fontsource/inter": "^5.3.0",
     "@radix-ui/react-collapsible": "^1.1.20",
     "@radix-ui/react-slot": "^1.3.3",
@@ -38,7 +36,6 @@
     "feral-blob": "^0.1.0",
     "lucide-react": "^1.34.0",
     "motion": "^13.1.1",
-    "puppeteer-core": "^25.9.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "streamdown": "^2.6.0",

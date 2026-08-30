@@ -13,7 +13,6 @@
     "preview:extension": "bun run --filter @astra-space/chrome-extension preview",
     "dev:agent": "bun run --filter @astra-space/agent dev",
     "check:agent": "bun run --filter @astra-space/agent check",
-    "test:integration": "bun run --filter @astra-space/chrome-extension test:integration && bun run --filter @astra-space/agent test:integration",
     "typecheck": "bun run --filter '*' typecheck"
   },
   "engines": {

@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>OCIC recorder buffer</title></head>
+<body>
+<!--
+  Offscreen document: the durable buffer + mic capture. It exists because the
+  MV3 service worker dies after 30s idle and cannot hold a 5-10 minute
+  recording. This document is persistent, has DOM + fetch + MediaRecorder, and
+  streams both tracks to IndexedDB as they arrive.
+-->
+<script type="module" src="offscreen.js"></script>
+</body>
+</html>
