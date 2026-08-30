@@ -12,6 +12,9 @@
     "build:extension": "bun run --filter @astra-space/chrome-extension build",
     "preview:extension": "bun run --filter @astra-space/chrome-extension preview",
     "dev:agent": "bun run --filter @astra-space/agent dev",
+    "dev:whatsapp": "bun --cwd=packages/agent-core run dev:whatsapp",
+    "build:whatsapp": "bun run --filter @astra-space/whatsapp-channel build",
+    "test:whatsapp": "bun run --filter @astra-space/whatsapp-channel test",
     "check:agent": "bun run --filter @astra-space/agent check",
     "typecheck": "bun run --filter '*' typecheck"
   },

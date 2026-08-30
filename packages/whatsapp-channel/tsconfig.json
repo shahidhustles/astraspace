@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2023",
     "module": "ESNext",
-    "lib": ["ES2023"],
+    "lib": ["ES2023", "DOM"],
     "types": ["node", "bun"],
     "moduleResolution": "bundler",
     "verbatimModuleSyntax": true,
@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "strict": true
   },
-  "include": ["agent/lib", "agent/tools", "agent/channels", "agent/extensions", "tests"]
+  "include": ["extension", "tests"]
 }
