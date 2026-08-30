@@ -1,8 +1,8 @@
 // Tool schemas ported from open-claude-in-chrome's host/tool-definitions.js
 // (MIT). Each entry is { name, description, paramShape } where paramShape is
 // the object literal of zod values passed to the MCP server's tool()
-// registration. These are the 21 browser-control tools exposed by the MCP
-// server; the extension-runtime background.js implements them.
+// registration. These are the browser-control tools currently exposed by the
+// MCP server; the extension-runtime background.js implements them.
 
 import { z } from "zod";
 
@@ -31,15 +31,6 @@ export const TOOLS: ToolDefinition[] = [
     description:
       "Creates a new empty tab in the MCP tab group. CRITICAL: You must get the context using tabs_context_mcp at least once before using other browser automation tools so you know what tabs exist.",
     paramShape: {},
-  },
-  {
-    name: "debug_timings",
-    description:
-      "Diagnostics: return the extension's per-tool-call timing ring buffer (javascript_tool entries carry preMs/evalMs splitting debugger-attach overhead from the Runtime.evaluate itself), plus a live snapshot of every MCP-group tab's scheduling-relevant state (active, audible, discarded, frozen, window state/focus). Survives service-worker restarts via storage.session. Use to localize latency anomalies: a large evalMs with a small preMs means the tab's renderer serviced the evaluation late.",
-    paramShape: {
-      limit: z.number().optional().describe("Max timing entries to return (default 200, cap 600)."),
-      clear: z.boolean().optional().describe("Clear the buffer after reading."),
-    },
   },
   {
     name: "tabs_close_mcp",
@@ -245,62 +236,6 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
-    name: "read_console_messages",
-    description:
-      "Read browser console messages (console.log, console.error, console.warn, etc.) from a specific tab. Useful for debugging JavaScript errors, viewing application logs, or understanding what's happening in the browser console. Returns console messages from the current domain only. If you don't have a valid tab ID, use tabs_context_mcp first to get available tabs. IMPORTANT: Always provide a pattern to filter messages - without a pattern, you may get too many irrelevant messages.",
-    paramShape: {
-      tabId: z
-        .number()
-        .describe(
-          "Tab ID to read console messages from. Must be a tab in the current group. Use tabs_context_mcp first if you don't have a valid tab ID."
-        ),
-      pattern: z
-        .string()
-        .optional()
-        .describe(
-          "Regex pattern to filter console messages. Only messages matching this pattern will be returned (e.g., 'error|warning' to find errors and warnings, 'MyApp' to filter app-specific logs). You should always provide a pattern to avoid getting too many irrelevant messages."
-        ),
-      limit: z
-        .number()
-        .optional()
-        .describe("Maximum number of messages to return. Defaults to 100. Increase only if you need more results."),
-      onlyErrors: z
-        .boolean()
-        .optional()
-        .describe("If true, only return error and exception messages. Default is false (return all message types)."),
-      clear: z
-        .boolean()
-        .optional()
-        .describe("If true, clear the console messages after reading to avoid duplicates on subsequent calls. Default is false."),
-    },
-  },
-  {
-    name: "read_network_requests",
-    description:
-      "Read HTTP network requests (XHR, Fetch, documents, images, etc.) from a specific tab. Useful for debugging API calls, monitoring network activity, or understanding what requests a page is making. Returns all network requests made by the current page, including cross-origin requests. Requests are automatically cleared when the page navigates to a different domain. If you don't have a valid tab ID, use tabs_context_mcp first to get available tabs.",
-    paramShape: {
-      tabId: z
-        .number()
-        .describe(
-          "Tab ID to read network requests from. Must be a tab in the current group. Use tabs_context_mcp first if you don't have a valid tab ID."
-        ),
-      urlPattern: z
-        .string()
-        .optional()
-        .describe(
-          "Optional URL pattern to filter requests. Only requests whose URL contains this string will be returned (e.g., '/api/' to filter API calls, 'example.com' to filter by domain)."
-        ),
-      limit: z
-        .number()
-        .optional()
-        .describe("Maximum number of requests to return. Defaults to 100. Increase only if you need more results."),
-      clear: z
-        .boolean()
-        .optional()
-        .describe("If true, clear the network requests after reading to avoid duplicates on subsequent calls. Default is false."),
-    },
-  },
-  {
     name: "read_page",
     description:
       "Get an accessibility tree representation of elements on the page. By default returns all elements including non-visible ones. Output is limited to 50000 characters by default. If the output exceeds this limit, you will receive an error asking you to specify a smaller depth or focus on a specific element using ref_id. Optionally filter for only interactive elements. If you don't have a valid tab ID, use tabs_context_mcp first to get available tabs.",
@@ -350,58 +285,6 @@ export const TOOLS: ToolDefinition[] = [
 
 
 
-  {
-    name: "debug",
-    description:
-      "Read what this extension actually did, in one timestamped stream. This holds what tool responses deliberately LEAVE OUT — never a copy of them: the arguments a call was made with, what a click landed on even when it landed correctly and the response stayed silent, the coordinate space a screenshot was captured in, CDP commands and their durations, and input dispatches that failed after the send returned. Use it to verify an action had the effect you intended, or to find where time went, rather than inferring either from a result that reads the same whether it worked or not. Reports its own limits on every read: how many events were dropped, and how far back the buffer reaches, so a short log is never mistaken for a quiet system.",
-    paramShape: {
-      limit: z.number().optional().describe("How many of the most recent matching events to show (default 100, max 1000)."),
-      kind: z
-        .enum(["tool", "cdp", "input", "hit", "port"])
-        .optional()
-        .describe(
-          'Only this kind of event. "tool" = calls in and out with their result line; "cdp" = protocol commands and durations; "input" = dispatched mouse/cursor events with coordinates; "hit" = what a click landed on; "port" = native host connect/disconnect.'
-        ),
-      filter: z
-        .string()
-        .optional()
-        .describe(
-          'Free-form match over each event, as a regex (falls back to plain substring if it will not compile). Examples: "mousePressed", "WARNING", "left_click|type".'
-        ),
-      tabId: z.number().optional().describe("Only events for this tab."),
-      since_ms: z
-        .number()
-        .optional()
-        .describe("Only events from the last N milliseconds — e.g. 5000 to see just what the last action did."),
-      clear: z.boolean().optional().describe("Empty the buffer after reading, so the next read starts clean around one action."),
-    },
-  },
-  {
-    name: "get_config",
-    description:
-      "Read the browser-automation settings this extension honors. Returns the default config (applies to every tab), any per-tab overrides, and a catalog of recognized settings with what each one does — that catalog is the source of truth, so read it before setting anything. Pass tabId to also see the config that actually applies to that tab (per-tab override merged over the default).",
-    paramShape: {
-      tabId: z
-        .number()
-        .optional()
-        .describe("Optional. Also report the effective config for this tab (its override merged over the default)."),
-    },
-  },
-  {
-    name: "set_config",
-    description:
-      "Change a browser-automation setting. Call get_config first to see the recognized settings and what they do. Omit tabId to set the default for every tab, or pass tabId to override the setting for that one tab only (per-tab overrides win, and are dropped when the tab closes). Pass value: null to clear a setting and fall back to the default. Settings persist, so a default you set stays on until you change it.",
-    paramShape: {
-      key: z.string().describe('Setting name, as listed by get_config (e.g. "humanize").'),
-      value: z
-        .union([z.boolean(), z.number(), z.string(), z.null()])
-        .describe("New value for the setting. Use null to clear it."),
-      tabId: z
-        .number()
-        .optional()
-        .describe("Optional. Scope this change to a single tab instead of changing the default for all tabs."),
-    },
-  },
   {
     name: "set_tab_focus",
     description:
