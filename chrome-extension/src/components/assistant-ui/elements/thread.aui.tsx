@@ -126,7 +126,7 @@ export const Thread: FC<ThreadProps> = ({
           </TooltipIconButton>
         </ThreadPrimitive.ScrollToBottom>
       </ThreadPrimitive.Viewport>
-      <div className="shrink-0 border-t border-border bg-background px-3 py-3">
+      <div className="relative z-10 shrink-0 bg-background px-3 py-3">
         {isRunning ? <WorkingCompanion /> : null}
         <Composer tools={composerTools} />
         <p className="mt-2 px-1 text-[11px] leading-[1.35] text-muted-foreground">
@@ -143,7 +143,7 @@ const WorkingCompanion: FC = () => (
       <TooltipTrigger asChild>
         <span
           aria-label="Astra is working"
-          className="astra-working-companion mx-auto mb-2 flex size-10 cursor-default items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="astra-working-companion absolute bottom-full left-1/2 z-20 mb-2 flex size-10 -translate-x-1/2 cursor-default items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-ring"
           role="status"
           tabIndex={0}
         >

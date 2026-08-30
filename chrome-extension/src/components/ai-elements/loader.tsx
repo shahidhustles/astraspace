@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 export interface LoaderProps {
   readonly className?: string;
   readonly size?: "sm" | "md" | "lg";
-  readonly variant?: "bars";
 }
 
 const barWidths = {
@@ -21,10 +20,10 @@ const containerSizes = {
 export function Loader({ className, size = "md" }: LoaderProps) {
   return (
     <div className={cn("flex", containerSizes[size], className)}>
-      {[...Array(3)].map((_, index) => (
+      {[0, 1, 2].map((index) => (
         <div
           className={cn(
-            "h-full bg-orbit-400 animate-[wave-bars_1.2s_ease-in-out_infinite]",
+            "h-full animate-[wave-bars_1.2s_ease-in-out_infinite] bg-orbit-400",
             barWidths[size],
           )}
           key={index}

@@ -2,33 +2,34 @@
 @import "@fontsource/inter/400.css";
 @import "@fontsource/inter/500.css";
 @import "feral-blob/blob.css";
+@import "tw-shimmer";
 
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/code/dist/*.js";
 
 :root {
   color-scheme: dark;
-  --color-space-950: #05030d;
-  --color-space-900: #090617;
-  --color-space-850: #0e0a21;
-  --color-space-800: #15102d;
-  --color-ink-50: #f5f2ff;
-  --color-ink-200: #d5cfea;
-  --color-ink-400: #9992ad;
-  --color-ink-600: #625c72;
-  --color-orbit-400: #a89bff;
-  --color-orbit-500: #8878f2;
-  --color-orbit-700: #5145b8;
-  --color-scan-400: #72d8e8;
-  --color-caution-400: #f1bd72;
-  --color-block-400: #f1849d;
-  --color-success-400: #83d7b0;
-  --color-focus-ring: #c0b6ff;
-  --border-quiet: rgba(213, 207, 234, 0.1);
-  --border-active: rgba(168, 155, 255, 0.42);
-  --rim-panel: inset 0 1px 0 rgba(255, 255, 255, 0.055);
-  --rim-active: inset 0 0 24px rgba(168, 155, 255, 0.07);
-  --shadow-dialog: 0 24px 80px rgba(2, 1, 8, 0.62);
+  --color-space-950: #000;
+  --color-space-900: #0a0a0a;
+  --color-space-850: #171717;
+  --color-space-800: #262626;
+  --color-ink-50: #fafafa;
+  --color-ink-200: #e5e5e5;
+  --color-ink-400: #a3a3a3;
+  --color-ink-600: #737373;
+  --color-orbit-400: #fafafa;
+  --color-orbit-500: #e5e5e5;
+  --color-orbit-700: #a3a3a3;
+  --color-scan-400: #e5e5e5;
+  --color-caution-400: #d4d4d4;
+  --color-block-400: #e5e5e5;
+  --color-success-400: #e5e5e5;
+  --color-focus-ring: #fafafa;
+  --border-quiet: rgba(255, 255, 255, 0.14);
+  --border-active: rgba(255, 255, 255, 0.42);
+  --rim-panel: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --rim-active: inset 0 0 24px rgba(255, 255, 255, 0.06);
+  --shadow-dialog: 0 24px 80px rgba(0, 0, 0, 0.62);
   --radius-control: 6px;
   --radius-row: 10px;
   --radius-panel: 16px;
@@ -42,7 +43,7 @@
   --muted-foreground: var(--color-ink-400);
   --border: var(--border-quiet);
   --input: var(--border-quiet);
-  --primary: var(--color-orbit-400);
+  --primary: var(--color-ink-50);
   --primary-foreground: var(--color-space-950);
   --sidebar: var(--color-space-900);
   --sidebar-foreground: var(--color-ink-200);
@@ -99,6 +100,28 @@
   --radius-row: var(--radius-row);
   --radius-panel: var(--radius-panel);
   --radius-frame: var(--radius-frame);
+  @keyframes collapsible-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(
+        --radix-collapsible-content-height,
+        var(--collapsible-panel-height, auto)
+      );
+    }
+  }
+  @keyframes collapsible-up {
+    from {
+      height: var(
+        --radix-collapsible-content-height,
+        var(--collapsible-panel-height, auto)
+      );
+    }
+    to {
+      height: 0;
+    }
+  }
 }
 
 html,
@@ -109,7 +132,7 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-space-950);
+  background: var(--background);
   font-family: var(--font-sans);
   overflow: hidden;
 }
@@ -134,6 +157,20 @@ textarea {
   --jelly-eye-sparkle: #8878f2;
   --jelly-outline-light: #a89bff;
   --jelly-outline: #5145b8;
+}
+
+@keyframes astra-working-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1deg);
+  }
+  50% {
+    transform: translateY(-3px) rotate(1deg);
+  }
+}
+
+.astra-working-companion {
+  animation: astra-working-bob 1.4s ease-in-out infinite;
 }
 
 @keyframes reasoning-enter {
@@ -173,3 +210,7 @@ textarea {
     animation-iteration-count: 1 !important;
   }
 }
+
+@custom-variant data-open (&:where([data-state="open"], [data-open]:not([data-open="false"])));
+
+@custom-variant data-closed (&:where([data-state="closed"], [data-closed]:not([data-closed="false"])));

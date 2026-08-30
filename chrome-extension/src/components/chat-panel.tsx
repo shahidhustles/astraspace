@@ -1,22 +1,4 @@
-import {
-  Conversation,
-  ConversationContent,
-  ConversationEmptyState,
-  ConversationScrollButton,
-} from "@/components/ai-elements/conversation";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  type PromptInputMessage,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@/components/ai-elements/prompt-input";
-import { Loader } from "@/components/ai-elements/loader";
-import { Button } from "@/components/ui/button";
-import { AstraBlob } from "@/components/astra-blob";
-import { ChatMessage } from "@/components/chat-message";
+import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { RuntimeControls } from "@/components/runtime-controls";
 import { EVE_HOST } from "@/lib/eve-config";
 import {
@@ -25,25 +7,88 @@ import {
   storeEveSession,
 } from "@/lib/eve-session";
 import { hasFirstAssistantToken } from "@/lib/eve-runtime-metadata";
+import { getLatestTodoSnapshot } from "@/lib/eve-todos";
 import { DEFAULT_MODEL_ID, type ModelId } from "@/lib/model-catalog";
-import { useEveAgent } from "eve/react";
-import { SquareIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  AssistantRuntimeProvider,
+  type AppendMessage,
+  type ExternalStoreMessageConverter,
+  type ThreadMessageLike,
+  useExternalStoreRuntime,
+} from "@assistant-ui/react";
+import { useEveAgent, type EveMessage } from "eve/react";
+import { useCallback, useEffect, useState } from "react";
 
-function Mark() {
-  return (
-    <span
-      aria-hidden
-      className="grid size-6 place-items-center rounded-control border border-border-quiet bg-space-850"
-    >
-      <span className="size-2 rounded-[2px] bg-orbit-400" />
-    </span>
-  );
-}
+const MAX_TOOL_PAYLOAD_LENGTH = 2_000;
+const stringifyToolPayload = (payload: unknown) => {
+  try {
+    const text = JSON.stringify(payload);
+    return typeof text === "string"
+      ? text.slice(0, MAX_TOOL_PAYLOAD_LENGTH)
+      : "[unavailable tool payload]";
+  } catch {
+    return "[unavailable tool payload]";
+  }
+};
+
+type ThreadContentPart = Exclude<ThreadMessageLike["content"], string>[number];
+
+const convertEveMessage: ExternalStoreMessageConverter<EveMessage> = (
+  message,
+) => {
+  const content: ThreadContentPart[] = [];
+  for (const part of message.parts) {
+    if (part.type === "text" || part.type === "reasoning") {
+      content.push({ type: part.type, text: part.text });
+      continue;
+    }
+    if (part.type !== "dynamic-tool") continue;
+    const common = {
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+      type: "tool-call" as const,
+    };
+    if (part.state === "input-streaming")
+      content.push({ ...common, argsText: part.inputText });
+    else if (part.state === "input-available")
+      content.push({ ...common, argsText: stringifyToolPayload(part.input) });
+    else if (part.state === "output-available")
+      content.push({
+        ...common,
+        argsText: stringifyToolPayload(part.input),
+        result: stringifyToolPayload(part.output),
+      });
+    else if (part.state === "output-error")
+      content.push({
+        ...common,
+        argsText: stringifyToolPayload(part.input),
+        result: part.errorText,
+        isError: true,
+      });
+    else if (part.state === "output-denied")
+      content.push({
+        ...common,
+        argsText: stringifyToolPayload(part.input),
+        result: "Tool approval was denied.",
+        isError: true,
+      });
+    else
+      content.push({ ...common, argsText: stringifyToolPayload(part.input) });
+  }
+  return { id: message.id, role: message.role, content };
+};
+
+const messageText = (message: AppendMessage) =>
+  message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("")
+    .trim();
 
 export function ChatPanel() {
-  const [restoredSessionId, setRestoredSessionId] = useState<string | null | undefined>(undefined);
-
+  const [restoredSessionId, setRestoredSessionId] = useState<
+    string | null | undefined
+  >(undefined);
   useEffect(() => {
     let cancelled = false;
     void readStoredEveSession().then((session) => {
@@ -53,10 +98,8 @@ export function ChatPanel() {
       cancelled = true;
     };
   }, []);
-
-  if (restoredSessionId === undefined) {
-    return <div aria-hidden className="h-full min-w-[280px] bg-space-950" />;
-  }
+  if (restoredSessionId === undefined)
+    return <div aria-hidden className="h-full min-w-[280px] bg-background" />;
   return (
     <EveChatPanel
       key={restoredSessionId ?? "new"}
@@ -65,7 +108,11 @@ export function ChatPanel() {
   );
 }
 
-function EveChatPanel({ restoredSessionId }: { restoredSessionId: string | null }) {
+function EveChatPanel({
+  restoredSessionId,
+}: {
+  readonly restoredSessionId: string | null;
+}) {
   const agent = useEveAgent({
     host: EVE_HOST,
     initialSession:
@@ -82,150 +129,84 @@ function EveChatPanel({ restoredSessionId }: { restoredSessionId: string | null 
       void notifyEveSessionChanged(session.sessionId);
     },
   });
-
-  const [input, setInput] = useState("");
   const [modelId, setModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [sendFailed, setSendFailed] = useState(false);
-  const [steering, setSteering] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const [replyEventStartIndex, setReplyEventStartIndex] = useState<number | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [replyEventStartIndex, setReplyEventStartIndex] = useState<
+    number | null
+  >(null);
   const isBusy = agent.status === "submitted" || agent.status === "streaming";
-  const hasError = sendFailed || agent.status === "error";
   const isAwaitingAssistant =
     isBusy &&
     replyEventStartIndex !== null &&
     !hasFirstAssistantToken(agent.events, replyEventStartIndex);
-
-  useEffect(() => {
-    if (!steering) return;
-    if (agent.status === "ready" || agent.status === "error") {
-      setSteering(false);
-      return;
-    }
-    const lastEvent = agent.events[agent.events.length - 1];
-    if (lastEvent?.type === "message.received") setSteering(false);
-  }, [agent.events, agent.status, steering]);
-
-  async function handleSubmit(message: PromptInputMessage) {
-    const text = message.text.trim();
-    if (text.length === 0) return;
-
-    setSendFailed(false);
-    setSteering(isBusy);
-    setReplyEventStartIndex(agent.events.length);
-    setInput("");
-
+  const onNew = useCallback(
+    async (message: AppendMessage) => {
+      const text = messageText(message);
+      if (!text) return;
+      setSendFailed(false);
+      setReplyEventStartIndex(agent.events.length);
+      try {
+        await agent.send(text, {
+          clientContext: { astraModelId: modelId },
+          ...(isBusy ? { turnPolicy: "steer" as const } : {}),
+        });
+      } catch {
+        setSendFailed(true);
+      }
+    },
+    [agent, isBusy, modelId],
+  );
+  const onNewChat = useCallback(async () => {
+    setResetting(true);
     try {
-      await agent.send(text, {
-        clientContext: { astraModelId: modelId },
-        ...(isBusy ? { turnPolicy: "steer" as const } : {}),
-      });
-    } catch {
-      setSendFailed(true);
-      setSteering(false);
-      setInput((current) => (current.length === 0 ? text : current));
-    }
-  }
-
-  async function handleStop() {
-    setStopping(true);
-    try {
-      await agent.cancel();
-    } catch {
-      return;
+      if (isBusy) await agent.cancel();
+      await storeEveSession(null);
+      agent.reset();
+      setSendFailed(false);
+      setReplyEventStartIndex(null);
     } finally {
-      setStopping(false);
+      setResetting(false);
     }
-  }
-
+  }, [agent, isBusy]);
+  const runtime = useExternalStoreRuntime({
+    messages: agent.data.messages,
+    isRunning: isBusy,
+    isDisabled: agent.status === "resuming" || resetting,
+    isSendDisabled: agent.status === "resuming" || resetting,
+    onNew,
+    onCancel: async () => {
+      await agent.cancel();
+    },
+    convertMessage: convertEveMessage,
+  });
+  const todoSnapshot = getLatestTodoSnapshot(agent.data.messages);
   return (
-    <div className="flex h-full min-w-[280px] flex-col bg-space-950 text-ink-50">
-      <header className="flex items-center border-b border-border-quiet bg-space-900 px-4 py-3 shadow-rim-panel">
-        <div className="flex items-center gap-2.5">
-          <Mark />
-          <p className="text-[15px] font-medium leading-[1.35]">Astra Space</p>
+    <AssistantRuntimeProvider runtime={runtime}>
+      {sendFailed || agent.status === "error" ? (
+        <div
+          className="absolute inset-x-3 top-14 z-10 rounded-lg border border-foreground/20 bg-background px-3 py-2 text-xs shadow-sm"
+          role="alert"
+        >
+          Eve is unavailable. Check that Eve is running, then send the message
+          again.
         </div>
-      </header>
-
-      <Conversation aria-label="Conversation with Eve">
-        <ConversationContent>
-          {agent.data.messages.length === 0 ? (
-            <ConversationEmptyState
-              description="Tell Astra what you want to get done."
-              title="Start a conversation"
-            >
-              <AstraBlob isComposing={input.trim().length > 0} />
-            </ConversationEmptyState>
-          ) : (
-            agent.data.messages.map((message) => (
-              <ChatMessage key={message.id} message={message} />
-            ))
-          )}
-          {isAwaitingAssistant ? (
-            <div aria-live="polite" className="flex min-h-8 items-center px-1" role="status">
-              <Loader className="text-orbit-400" size="sm" variant="bars" />
-            </div>
-          ) : null}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
-
-      <footer className="border-t border-border-quiet bg-space-950 px-3 pb-3 pt-3">
-        {hasError ? (
-          <div
-            className="mb-3 rounded-row border border-block-400/35 bg-block-400/8 px-3 py-2.5"
-            role="alert"
-          >
-            <p className="text-[13px] font-medium leading-[1.4] text-block-400">
-              Eve is unavailable
-            </p>
-            <p className="mt-1 text-[12px] leading-[1.45] text-ink-400">
-              Check that Eve is running, then send the message again.
-            </p>
-          </div>
-        ) : null}
-
-        <PromptInput onSubmit={handleSubmit}>
-          <PromptInputBody>
-            <PromptInputTextarea
-              onChange={(event) => {
-                setInput(event.currentTarget.value);
-                if (hasError) setSendFailed(false);
-              }}
-              value={input}
-            />
-          </PromptInputBody>
-          <PromptInputFooter>
-            <PromptInputTools>
-              <RuntimeControls
-                events={agent.events}
-                modelId={modelId}
-                onModelChange={setModelId}
-              />
-            </PromptInputTools>
-            <div className="flex items-center gap-1">
-              {isBusy ? (
-                <Button
-                  aria-label="Stop the reply"
-                  className="size-10 text-block-400 hover:bg-block-400/10 hover:text-block-400"
-                  disabled={stopping}
-                  onClick={() => void handleStop()}
-                  size="icon"
-                  title="Stop the reply"
-                  type="button"
-                  variant="ghost"
-                >
-                  <SquareIcon aria-hidden className="size-4 fill-current" />
-                </Button>
-              ) : null}
-              <PromptInputSubmit disabled={input.trim().length === 0} status={agent.status} />
-            </div>
-          </PromptInputFooter>
-        </PromptInput>
-        <p className="mt-2 px-1 text-[11px] leading-[1.35] text-ink-600">
-          Enter to send. Shift+Enter for a new line.
-        </p>
-      </footer>
-    </div>
+      ) : null}
+      <Thread
+        composerTools={
+          <RuntimeControls
+            events={agent.events}
+            modelId={modelId}
+            onModelChange={setModelId}
+          />
+        }
+        isAwaitingAssistant={isAwaitingAssistant}
+        isNewChatDisabled={agent.status === "resuming" || resetting}
+        onNewChat={() => {
+          void onNewChat();
+        }}
+        todoSnapshot={todoSnapshot}
+      />
+    </AssistantRuntimeProvider>
   );
 }
