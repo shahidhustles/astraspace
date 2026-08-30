@@ -1,18 +1,20 @@
 # @astra-space/browser-mcp
 
-A fork of [open-claude-in-chrome](https://github.com/noemica-io/open-claude-in-chrome) (MIT) — a
-clean-room reimplementation of Anthropic's "Claude in Chrome" extension — packaged as a
-**Streamable HTTP MCP server** with a **WebSocket router** that a Chrome extension connects to.
+The browser-control runtime for Astra Space — a fork of
+[open-claude-in-chrome](https://github.com/noemica-io/open-claude-in-chrome) (MIT), a clean-room
+reimplementation of Anthropic's "Claude in Chrome" extension — packaged as a **Streamable HTTP MCP
+server** with a **WebSocket router** that the Astra Space Chrome extension connects to.
 
 ```
 Eve (cloud or local)
    │  MCP (Streamable HTTP)
    ▼
-packages/browser-mcp  ──►  WebSocket  ──►  Chrome extension  ──►  chrome.debugger  ──►  user's live tab
-   (MCP server + router)                   (extension-runtime/)        (CDP)
+packages/browser-mcp  ──►  WebSocket  ──►  Astra Space extension  ──►  chrome.debugger  ──►  user's live tab
+   (MCP server + router)                (src/browser-control/)              (CDP)
 ```
 
-The user installs **only** the extension. No Node, no native host, no daemon on their machine.
+The user installs **only** the Astra Space extension (which bundles the browser-control runtime at
+`chrome-extension/src/browser-control/`). No Node, no native host, no daemon on their machine.
 
 ## What's in here
 
@@ -22,9 +24,9 @@ The user installs **only** the extension. No Node, no native host, no daemon on 
   (no inbound firewall hole needed). Correlates `tool_request` / `tool_response` by id.
 - `src/tool-schemas.ts` — the 26 browser tools (read_page, computer, form_input, navigate, find,
   tab tools, etc.), ported from the fork.
-- `extension-runtime/` — the vendored fork extension. `background.js` was patched to speak
-  WebSocket instead of native messaging; `content.js`, the ref system, and the CDP/action layer
-  are unchanged.
+- The extension runtime itself (background.js CDP layer, content.js ref system, ws-client.js) lives
+  in the `chrome-extension` workspace at `src/browser-control/`, merged into the Astra Space
+  extension.
 
 ## The message contract
 

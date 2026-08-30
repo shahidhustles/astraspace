@@ -15,20 +15,11 @@ export default defineConfig({
     },
   },
   build: {
-    // Observation page programs (src/browser/observation/index.ts) assemble injected
-    // expressions from Function.prototype.toString(). Minifier identifier renaming
-    // breaks the hand-written names in those generated sources, so this build skips
-    // minification. Revisit together with any change to that reflection contract.
     minify: false,
     rollupOptions: {
-      external: (id, importer) =>
-        id === "@puppeteer/browsers" ||
-        id === "chromium-bidi/lib/bidiMapper/BidiMapper.js" ||
-        id.includes("/puppeteer-core/lib/puppeteer/node/") ||
-        (id.startsWith("node:") && importer?.includes("/puppeteer-core/") === true),
       input: {
         index: fileURLToPath(new URL("./index.html", import.meta.url)),
-        background: fileURLToPath(new URL("./src/background.ts", import.meta.url)),
+        background: fileURLToPath(new URL("./src/browser-control/background.js", import.meta.url)),
       },
       output: {
         entryFileNames: (chunk) =>

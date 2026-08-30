@@ -95,7 +95,7 @@ export function PromptInputTextarea({ className, onKeyDown, ...props }: PromptIn
 }
 
 export type PromptInputSubmitProps = ComponentProps<"button"> & {
-  status?: "error" | "ready" | "streaming" | "submitted";
+  status?: "error" | "ready" | "resuming" | "streaming" | "submitted";
 };
 
 export function PromptInputSubmit({

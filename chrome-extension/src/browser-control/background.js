@@ -585,7 +585,7 @@ async function sendContentMessage(tabId, message) {
     // Content script might not be injected yet, try injecting
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content.js"],
+      files: ["browser-control/content.js"],
     });
     // Retry
     return chrome.tabs.sendMessage(tabId, message);
@@ -644,11 +644,16 @@ async function takeScreenshot(tabId) {
     return (await cdp(tabId, "Page.captureScreenshot", params)).data;
   };
 
-  let base64 = await shot(45);
+  // Start at a quality that keeps text readable for the model (70 is a good
+  // balance; the old 45 made small text blurry). Step down gently only when
+  // the image is genuinely huge, so the model can still read the page.
+  let base64 = await shot(70);
 
-  // If still too large (>350KB base64 ≈ ~262KB binary), reduce quality further
-  if (base64.length > 350000) {
-    base64 = await shot(28);
+  if (base64.length > 600000) {
+    base64 = await shot(55);
+  }
+  if (base64.length > 600000) {
+    base64 = await shot(40);
   }
 
   // The coordinate space this image is in — the single fact that made screenshot
@@ -659,7 +664,7 @@ async function takeScreenshot(tabId) {
   dbg(
     "cdp",
     `screenshot ${clip ? `${clip.width}x${clip.height} CSS px, dpr ${Math.round((1 / clip.scale) * 100) / 100}, clip scale ${Math.round(clip.scale * 1000) / 1000}` : "NO CLIP — image is in device pixels, not CSS pixels"}` +
-      ` -> ${Math.round((base64.length * 3) / 4 / 1024)}KB${base64.length > 350000 ? " (after quality retry)" : ""}`,
+      ` -> ${Math.round((base64.length * 3) / 4 / 1024)}KB${base64.length > 600000 ? " (after quality retry)" : ""}`,
     { tab: tabId }
   );
 
@@ -3014,7 +3019,7 @@ let _schemaMd = null;
 async function getSchemaMd() {
   if (_schemaMd != null) return _schemaMd;
   try {
-    const res = await fetch(chrome.runtime.getURL("recorder/SCHEMA_v0.md"));
+    const res = await fetch(chrome.runtime.getURL("browser-control/recorder/SCHEMA_v0.md"));
     _schemaMd = await res.text();
   } catch {
     _schemaMd = "";
@@ -3197,3 +3202,8 @@ async function recoverTabGroupState() {
 
 recoverTabGroupState();
 connectNativeHost();
+
+// --- Astra Space side panel ---
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((error) => console.error("Failed to enable panel on action click:", error));

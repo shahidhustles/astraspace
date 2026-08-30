@@ -20,7 +20,7 @@
     "@ai-sdk/openai-compatible": "^3.0.37",
     "@vercel/connect": "0.4.3",
     "ai": "^7.0.58",
-    "eve": "^0.44.4",
+    "eve": "^0.47.3",
     "zod": "4.4.3"
   }
 }

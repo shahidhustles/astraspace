@@ -5,8 +5,20 @@
   "description": "A privacy-first browser agent.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzlulUO2FnLjzgcxjk94P8V4nDzSRGNZ4/t9ywNkmXFxVja7e0AP4LQFm19CMLcGvVVDrqw6LEAk1azK5AlX08vbkkNG75vLyv30j5psQurLX307j/iBf7qKbc/FriMQlXyLiWLxITHhlDshh05F+BnnANi+fxkqS2h3kH/u50wZ1w3afXAa1S4cxvbupEvmYrSjJs1Ze1jgQlFwrElZ3SDoJNHsvJMVu92rkMDcwRUZYdS7acn9hJig+nX8nw27XeQJsHC7B45gWCboTsm+b0lrOcU0r+s2ivnjD6gLelkRvio+iifnxHsrmRvyBfCkgwEa2Oz1pRH3FMYlx+9Lm4QIDAQAB",
   "minimum_chrome_version": "118",
-  "host_permissions": ["http://127.0.0.1:2000/*"],
-  "permissions": ["sidePanel", "debugger", "tabs", "storage"],
+  "host_permissions": ["http://127.0.0.1:2000/*", "<all_urls>"],
+  "permissions": [
+    "sidePanel",
+    "tabs",
+    "debugger",
+    "activeTab",
+    "scripting",
+    "tabGroups",
+    "windows",
+    "storage",
+    "alarms",
+    "offscreen",
+    "clipboardWrite"
+  ],
   "action": {
     "default_title": "Open Astra Space"
   },
@@ -16,5 +28,24 @@
   "background": {
     "service_worker": "background.js",
     "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["browser-control/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["browser-control/recorder/capture.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "16": "browser-control/icons/icon16.png",
+    "48": "browser-control/icons/icon48.png",
+    "128": "browser-control/icons/icon128.png"
   }
 }

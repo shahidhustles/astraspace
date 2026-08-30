@@ -185,7 +185,16 @@
       if (truncated) return;
       if (depth > maxDepth) return;
       if (!el || el.nodeType !== 1) return;
+      try {
+        walkSafe(el, depth, indent);
+      } catch (e) {
+        // A single pathological node (shadow DOM, cross-realm, detached) must
+        // not take down the whole page tree. Skip it and keep walking.
+        skippedNodes++;
+      }
+    }
 
+    function walkSafe(el, depth, indent) {
       const tag = el.tagName.toLowerCase();
       // Skip invisible, script, style, svg internals
       if (["script", "style", "noscript", "template"].includes(tag)) return;
@@ -251,7 +260,11 @@
       else return `Error: ref_id "${startRefId}" not found or element was garbage collected.`;
     }
 
+    let skippedNodes = 0;
     walk(root, 0, "");
+    if (skippedNodes > 0) {
+      output += `\n... (skipped ${skippedNodes} problematic node(s))`;
+    }
     return output;
   }
 
@@ -585,8 +598,12 @@
   // --- Message handler ---
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "generateAccessibilityTree") {
-      const result = generateAccessibilityTree(msg.options || {});
-      sendResponse({ result });
+      try {
+        const result = generateAccessibilityTree(msg.options || {});
+        sendResponse({ result });
+      } catch (e) {
+        sendResponse({ result: "Error: Could not generate accessibility tree: " + (e && e.message ? e.message : e) });
+      }
       return true;
     }
 
