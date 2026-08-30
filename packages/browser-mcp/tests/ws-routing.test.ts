@@ -111,4 +111,50 @@ describe("ws-router", () => {
     expect(data.result.isError).toBe(true);
     expect(data.result.content[0].text).toContain("browser_not_connected");
   });
+
+  it("keeps a screenshot as an MCP image content part", async () => {
+    const ext = await connect("session-screenshot");
+    const requestPromise = waitForMessage(ext, "tool_request");
+    const httpBase = `http://localhost:${server.port}/mcp`;
+    const init = await fetch(httpBase, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "0.0.1" } },
+      }),
+    });
+    const sessionId = init.headers.get("mcp-session-id")!;
+    const callPromise = fetch(httpBase, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "Mcp-Session-Id": sessionId },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "computer", arguments: { action: "screenshot", tabId: 1 } },
+      }),
+    });
+
+    const request = await requestPromise;
+    ext.send(JSON.stringify({
+      type: "tool_response",
+      id: request.id,
+      result: {
+        content: [
+          { type: "text", text: "Captured screenshot" },
+          { type: "image", data: "/9j/", mimeType: "image/jpeg" },
+        ],
+      },
+    }));
+
+    const response = await (await callPromise).json();
+    expect(response.result.content).toEqual([
+      { type: "text", text: "Captured screenshot" },
+      { type: "image", data: "/9j/", mimeType: "image/jpeg" },
+    ]);
+    ext.close();
+  });
 });

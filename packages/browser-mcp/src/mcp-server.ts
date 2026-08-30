@@ -105,7 +105,7 @@ function registerTools(server: McpServer, router: WsRouter): void {
         }
         try {
           const result = await router.callTool(sessionId, tool.name, args);
-          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+          return asMcpToolResult(result);
         } catch (error) {
           return mcpError(
             error instanceof Error && "code" in error && typeof (error as { code: unknown }).code === "string"
@@ -117,6 +117,48 @@ function registerTools(server: McpServer, router: WsRouter): void {
       },
     );
   }
+}
+
+type McpToolContent =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "image"; readonly data: string; readonly mimeType: string };
+
+function asMcpToolResult(result: unknown): { content: McpToolContent[] } {
+  const content = contentFromBrowserResult(result);
+  if (content !== null) return { content };
+
+  return { content: [{ type: "text", text: JSON.stringify(result) }] };
+}
+
+function contentFromBrowserResult(result: unknown): McpToolContent[] | null {
+  if (!isRecord(result) || !Array.isArray(result.content)) return null;
+
+  const content: McpToolContent[] = [];
+  for (const part of result.content) {
+    if (!isRecord(part) || typeof part.type !== "string") return null;
+
+    if (part.type === "text" && typeof part.text === "string") {
+      content.push({ type: "text", text: part.text });
+      continue;
+    }
+
+    if (
+      part.type === "image" &&
+      typeof part.data === "string" &&
+      typeof part.mimeType === "string"
+    ) {
+      content.push({ type: "image", data: part.data, mimeType: part.mimeType });
+      continue;
+    }
+
+    return null;
+  }
+
+  return content;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function firstSessionId(router: WsRouter): string | null {
