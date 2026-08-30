@@ -225,43 +225,7 @@ export const TOOLS: ToolDefinition[] = [
         ),
     },
   },
-  {
-    name: "gif_creator",
-    description:
-      "Manage GIF recording and export for browser automation sessions. Control when to start/stop recording browser actions (clicks, scrolls, navigation), then export as an animated GIF with visual overlays (click indicators, action labels, progress bar, watermark). All operations are scoped to the tab's group. When starting recording, take a screenshot immediately after to capture the initial state as the first frame. When stopping recording, take a screenshot immediately before to capture the final state as the last frame. For export, either provide 'coordinate' to drag/drop upload to a page element, or set 'download: true' to download the GIF.",
-    paramShape: {
-      action: z
-        .enum(["start_recording", "stop_recording", "export", "clear"])
-        .describe(
-          "Action to perform: 'start_recording' (begin capturing), 'stop_recording' (stop capturing but keep frames), 'export' (generate and export GIF), 'clear' (discard frames)"
-        ),
-      tabId: z.number().describe("Tab ID to identify which tab group this operation applies to"),
-      download: z
-        .boolean()
-        .optional()
-        .describe("Always set this to true for the 'export' action only. This causes the gif to be downloaded in the browser."),
-      filename: z
-        .string()
-        .optional()
-        .describe("Optional filename for exported GIF (default: 'recording-[timestamp].gif'). For 'export' action only."),
-      options: z
-        .object({
-          showClickIndicators: z.boolean().optional().describe("Show orange circles at click locations (default: true)"),
-          showDragPaths: z.boolean().optional().describe("Show red arrows for drag actions (default: true)"),
-          showActionLabels: z.boolean().optional().describe("Show black labels describing actions (default: true)"),
-          showProgressBar: z.boolean().optional().describe("Show orange progress bar at bottom (default: true)"),
-          showWatermark: z.boolean().optional().describe("Show Claude logo watermark (default: true)"),
-          quality: z
-            .number()
-            .optional()
-            .describe("GIF compression quality, 1-30 (lower = better quality, slower encoding). Default: 10"),
-        })
-        .optional()
-        .describe(
-          "Optional GIF enhancement options for 'export' action. Properties: showClickIndicators (bool), showDragPaths (bool), showActionLabels (bool), showProgressBar (bool), showWatermark (bool), quality (number 1-30). All default to true except quality (default: 10)."
-        ),
-    },
-  },
+
   {
     name: "javascript_tool",
     description:
@@ -382,58 +346,10 @@ export const TOOLS: ToolDefinition[] = [
         ),
     },
   },
-  {
-    name: "shortcuts_list",
-    description:
-      "List all available shortcuts and workflows (shortcuts and workflows are interchangeable). Returns shortcuts with their commands, descriptions, and whether they are workflows. Use shortcuts_execute to run a shortcut or workflow.",
-    paramShape: {
-      tabId: z
-        .number()
-        .describe(
-          "Tab ID to list shortcuts from. Must be a tab in the current group. Use tabs_context_mcp first if you don't have a valid tab ID."
-        ),
-    },
-  },
-  {
-    name: "shortcuts_execute",
-    description:
-      "Execute a shortcut or workflow by running it in a new sidepanel window using the current tab (shortcuts and workflows are interchangeable). Use shortcuts_list first to see available shortcuts. This starts the execution and returns immediately - it does not wait for completion.",
-    paramShape: {
-      tabId: z
-        .number()
-        .describe(
-          "Tab ID to execute the shortcut on. Must be a tab in the current group. Use tabs_context_mcp first if you don't have a valid tab ID."
-        ),
-      shortcutId: z.string().optional().describe("The ID of the shortcut to execute"),
-      command: z
-        .string()
-        .optional()
-        .describe("The command name of the shortcut to execute (e.g., 'debug', 'summarize'). Do not include the leading slash."),
-    },
-  },
-  {
-    name: "switch_browser",
-    description:
-      "Hand off browser automation to a different Chromium browser (Chrome, Brave, Edge). One browser drives at a time. Calling this releases the current browser's hold on the shared runtime for ~15s so a target browser with this extension enabled can take over automatically (no restart). Tell the user to enable the extension in the target browser first. After calling, wait a few seconds and use tabs_context_mcp to confirm which browser is now active.",
-    paramShape: {},
-  },
-  {
-    name: "update_plan",
-    description:
-      "Present a plan to the user for approval before taking actions. The user will see the domains you intend to visit and your approach. Once approved, you can proceed with actions on the approved domains without additional permission prompts.",
-    paramShape: {
-      domains: z
-        .array(z.string())
-        .describe(
-          "List of domains you will visit (e.g., ['github.com', 'stackoverflow.com']). These domains will be approved for the session when the user accepts the plan."
-        ),
-      approach: z
-        .array(z.string())
-        .describe(
-          "High-level description of what you will do. Focus on outcomes and key actions, not implementation details. Be concise - aim for 3-7 items."
-        ),
-    },
-  },
+
+
+
+
   {
     name: "debug",
     description:
@@ -504,35 +420,8 @@ export const TOOLS: ToolDefinition[] = [
         ),
     },
   },
-  {
-    name: "upload_image",
-    description:
-      'Upload a previously captured screenshot (from the computer tool\'s screenshot action) to a file input. Identify the target with `ref` from read_page or find; the target must be an <input type="file"> (especially useful for hidden inputs).',
-    paramShape: {
-      imageId: z
-        .string()
-        .describe("ID of a previously captured screenshot (from the computer tool's screenshot action) or a user-uploaded image"),
-      tabId: z
-        .number()
-        .describe("Tab ID where the target element is located. This is where the image will be uploaded to."),
-      ref: z
-        .string()
-        .describe('Element reference ID of the file input from read_page or find tools (e.g., "ref_1", "ref_2").'),
-      filename: z.string().optional().describe('Optional filename for the uploaded file (default: "image.png")'),
-    },
-  },
-  {
-    name: "retranscribe_recording",
-    description:
-      "Re-run transcription for a saved recording whose transcript failed at stop (e.g. a transient OpenAI error). Re-assembles the durable audio segments, re-transcribes them, and patches trace.json on disk, overwriting the previous transcript. Returns the updated transcript status and utterance count. Constraints: only works for the MOST RECENT recording recorded after this feature shipped (a newer recording clears the in-browser audio store; older sessions lack the segment anchors needed to map timestamps). Only call it to recover a recording whose transcript actually failed — re-running on a good one replaces the transcript with a fresh result and could worsen it if OpenAI is currently failing.",
-    paramShape: {
-      recording_id: z
-        .string()
-        .describe(
-          "The recording_id shown in the bundle path after a recording_complete notification (e.g. the timestamp-based id)."
-        ),
-    },
-  },
+
+
   {
     name: "file_upload",
     description:
