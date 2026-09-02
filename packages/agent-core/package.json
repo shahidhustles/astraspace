@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "eve dev",
-    "dev:whatsapp": "eve dev --no-ui --logs all",
+    "dev:whatsapp": "ASTRA_WHATSAPP_ENABLED=1 eve dev --no-ui --logs all",
     "check": "eve info",
     "test": "bun test",
     "typecheck": "tsc --noEmit"

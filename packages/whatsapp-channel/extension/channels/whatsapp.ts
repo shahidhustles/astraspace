@@ -21,6 +21,7 @@ import {
 import QRCode from "qrcode";
 
 import { readTextMessage } from "../lib/messages";
+import { isWhatsAppEnabled } from "../lib/runtime-config";
 
 interface WhatsAppState {
   jid: string;
@@ -323,4 +324,6 @@ export default defineChannel<WhatsAppState, WhatsAppChannelContext>({
   } satisfies ChannelEvents<WhatsAppChannelContext>,
 });
 
-startSocket();
+if (isWhatsAppEnabled(process.env.ASTRA_WHATSAPP_ENABLED)) {
+  startSocket();
+}
