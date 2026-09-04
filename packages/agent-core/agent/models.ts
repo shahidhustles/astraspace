@@ -8,17 +8,17 @@ const goOpenAI = createOpenAI({
   apiKey: process.env.OPENCODE_API_KEY,
   baseURL: GO_BASE_URL,
 });
+const goOpenAICompatible = createOpenAICompatible({
+  apiKey: process.env.OPENCODE_API_KEY,
+  baseURL: GO_BASE_URL,
+  name: "opencodeGo",
+});
 const zenOpenAI = createOpenAI({
   apiKey: process.env.OPENCODE_API_KEY,
   baseURL: ZEN_BASE_URL,
 });
-const zenOpenAICompatible = createOpenAICompatible({
-  apiKey: process.env.OPENCODE_API_KEY,
-  baseURL: ZEN_BASE_URL,
-  name: "opencode",
-});
 
-export const DEFAULT_MODEL_ID = "muse-spark-1.2-contributor-free";
+export const DEFAULT_MODEL_ID = "muse-spark-1.3-contributor";
 
 export const models = {
   "gpt-5.6-luna": {
@@ -26,7 +26,34 @@ export const models = {
     modelContextWindowTokens: 1_050_000,
     modelOptions: {
       providerOptions: {
-        openai: { forceReasoning: true, reasoningEffort: "max" },
+        openai: { forceReasoning: true, reasoningEffort: "high" },
+      },
+    },
+  },
+  "glm-5.3-flash": {
+    model: goOpenAICompatible.chatModel("glm-5.3-flash"),
+    modelContextWindowTokens: 1_000_000,
+    modelOptions: {
+      providerOptions: {
+        opencodeGo: { reasoningEffort: "max" },
+      },
+    },
+  },
+  "deepseek-v4-flash": {
+    model: goOpenAICompatible.chatModel("deepseek-v4-flash"),
+    modelContextWindowTokens: 1_000_000,
+    modelOptions: {
+      providerOptions: {
+        opencodeGo: { reasoningEffort: "max" },
+      },
+    },
+  },
+  "muse-spark-1.3-contributor": {
+    model: goOpenAI.responses("muse-spark-1.3-contributor"),
+    modelContextWindowTokens: 1_048_576,
+    modelOptions: {
+      providerOptions: {
+        openai: { forceReasoning: true, reasoningEffort: "xhigh" },
       },
     },
   },
@@ -38,35 +65,6 @@ export const models = {
         openai: { forceReasoning: true, reasoningEffort: "xhigh" },
       },
     },
-  },
-  "mimo-v2.5-free": {
-    model: zenOpenAICompatible.chatModel("mimo-v2.5-free"),
-    modelContextWindowTokens: 200_000,
-  },
-  "hy3-free": {
-    model: zenOpenAICompatible.chatModel("hy3-free"),
-    modelContextWindowTokens: 190_000,
-    modelOptions: {
-      providerOptions: {
-        opencode: { reasoningEffort: "high" },
-      },
-    },
-  },
-  "ling-3.0-flash-fin-free": {
-    model: zenOpenAICompatible.chatModel("ling-3.0-flash-fin-free"),
-    modelContextWindowTokens: 262_144,
-  },
-  "nemotron-3-ultra-free": {
-    model: zenOpenAICompatible.chatModel("nemotron-3-ultra-free"),
-    modelContextWindowTokens: 1_000_000,
-  },
-  "nemotron-3.5-lightning-free": {
-    model: zenOpenAICompatible.chatModel("nemotron-3.5-lightning-free"),
-    modelContextWindowTokens: 262_144,
-  },
-  "big-pickle": {
-    model: zenOpenAICompatible.chatModel("big-pickle"),
-    modelContextWindowTokens: 200_000,
   },
 } as const;
 

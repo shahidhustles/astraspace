@@ -182,6 +182,17 @@ function nativeRequest(msg) {
 }
 
 // --- Tab group management ---
+const ASTRA_TAB_GROUP_TITLE = "Astra Space";
+const ASTRA_TAB_GROUP_COLOR = "purple";
+const LEGACY_TAB_GROUP_TITLE = "MCP";
+
+async function labelAstraTabGroup(groupId) {
+  await chrome.tabGroups.update(groupId, {
+    color: ASTRA_TAB_GROUP_COLOR,
+    title: ASTRA_TAB_GROUP_TITLE,
+  });
+}
+
 async function ensureTabGroup(createIfEmpty) {
   // Check if our tab group still exists
   if (tabGroupId !== null) {
@@ -191,7 +202,10 @@ async function ensureTabGroup(createIfEmpty) {
         // Verify tabs are still in the group
         const tabs = await chrome.tabs.query({ groupId: tabGroupId });
         tabGroupTabs = new Set(tabs.map((t) => t.id));
-        if (tabGroupTabs.size > 0) return;
+        if (tabGroupTabs.size > 0) {
+          await labelAstraTabGroup(tabGroupId);
+          return;
+        }
       }
     } catch {
       tabGroupId = null;
@@ -207,7 +221,7 @@ async function ensureTabGroup(createIfEmpty) {
   const win = await chrome.windows.create({ focused: false, url: "about:blank" });
   const tab = win.tabs[0];
   const groupId = await chrome.tabs.group({ tabIds: [tab.id] });
-  await chrome.tabGroups.update(groupId, { title: "MCP", color: "blue" });
+  await labelAstraTabGroup(groupId);
   tabGroupId = groupId;
   tabGroupTabs = new Set([tab.id]);
 }
@@ -220,7 +234,7 @@ function formatTabContext(tabs) {
     group: t.astraGroup ? "agent" : "user",
   }));
 
-  let text = `Tab Context:\n- Agent tabs (MCP group):\n`;
+  let text = `Tab Context:\n- Agent tabs (Astra Space group):\n`;
   let anyAgent = false;
   for (const t of tabs.filter((x) => x.astraGroup)) {
     anyAgent = true;
@@ -257,10 +271,14 @@ async function isInGroup(tabId) {
     if (tabGroupId === null && tab.groupId !== -1) {
       try {
         const group = await chrome.tabGroups.get(tab.groupId);
-        if (group.title === "MCP") {
+        if (
+          group.title === ASTRA_TAB_GROUP_TITLE ||
+          group.title === LEGACY_TAB_GROUP_TITLE
+        ) {
           tabGroupId = group.id;
           const groupTabs = await chrome.tabs.query({ groupId: tabGroupId });
           tabGroupTabs = new Set(groupTabs.map((t) => t.id));
+          await labelAstraTabGroup(tabGroupId);
         }
       } catch {}
     }
@@ -2396,11 +2414,16 @@ async function handleToolRequest(id, tool, args) {
 // Recover MCP tab group state after service worker restart
 async function recoverTabGroupState() {
   try {
-    const groups = await chrome.tabGroups.query({ title: "MCP" });
+    const namedGroups = await chrome.tabGroups.query({ title: ASTRA_TAB_GROUP_TITLE });
+    const groups =
+      namedGroups.length > 0
+        ? namedGroups
+        : await chrome.tabGroups.query({ title: LEGACY_TAB_GROUP_TITLE });
     if (groups.length > 0) {
       tabGroupId = groups[0].id;
       const tabs = await chrome.tabs.query({ groupId: tabGroupId });
       tabGroupTabs = new Set(tabs.map((t) => t.id));
+      await labelAstraTabGroup(tabGroupId);
     }
   } catch {
     // Not critical — will be set on first tabs_context_mcp call
